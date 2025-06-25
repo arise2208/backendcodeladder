@@ -22,6 +22,10 @@ const authenticateToken = require('./middleware/auth');
 const adminRoutes = require('./routes/admin');
 app.use('/admin', adminRoutes);
 
+const codechefRoute = require('./routes/codechef');
+app.use('/api', codechefRoute);
+
+
 mongoose.connect(process.env.MONGODB_URL, {
   useNewUrlParser: true,
   useUnifiedTopology: true
@@ -32,6 +36,7 @@ mongoose.connect(process.env.MONGODB_URL, {
 app.get('/', (req, res) => {
   res.send('Hello World!');
 });
+
 
 // Users list (protected)
 app.get('/userslist', middleware, async (req, res) => {
