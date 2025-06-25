@@ -51,4 +51,8 @@ router.post('/codechef-accepted', async (req, res) => {
   }
 });
 
+router.get('/test', async (req, res) => {
+  res.send("working");
+});
+
 module.exports = router;
