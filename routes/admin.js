@@ -96,6 +96,30 @@ router.delete('/questions/:id', middleware, async (req, res) => {
     res.status(500).json({ error: 'Failed to delete question: ' + err.message });
   }
 });
+router.put('/questions/:id', middleware, async (req, res) => {
+  const questionId = Number(req.params.id);
+  const { title, link, tags } = req.body;
+
+  try {
+    // Only update fields that are provided
+    const update = {};
+    if (title !== undefined) update.title = title;
+    if (link !== undefined) update.link = link;
+    if (tags !== undefined) update.tags = tags;
+
+    const updatedQuestion = await Question.findOneAndUpdate(
+      { question_id: questionId },
+      { $set: update },
+      { new: true }
+    );
+    if (!updatedQuestion) {
+      return res.status(404).json({ error: 'Question not found' });
+    }
+    res.json({ message: 'Question updated', question: updatedQuestion });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update question: ' + err.message });
+  }
+});
 
 /**
  * DELETE /admin/ladders/:id
