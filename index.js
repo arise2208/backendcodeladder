@@ -25,6 +25,8 @@ app.use('/admin', adminRoutes);
 const codechefRoute = require('./routes/codechef');
 app.use('/api', codechefRoute);
 
+const Submission = require('./models/Submission');
+
 
 mongoose.connect(process.env.MONGODB_URL, {
   useNewUrlParser: true,
@@ -325,14 +327,10 @@ app.post('/removecollab', middleware, async (req, res) => {
 app.patch('/markquestion', middleware, async (req, res) => {
   try {
     const { questionid, user } = req.body;
-    console.log(req.body);
-
-    // Check for missing input
     if (!questionid || !user) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Find the question by its custom ID
     const question = await Question.findOne({ question_id: questionid });
     if (!question) {
       return res.status(404).json({ error: "Question not found" });
@@ -343,13 +341,31 @@ app.patch('/markquestion', middleware, async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
+    // Update Question model
     if (!question.solved_by.includes(userToBe.username)) {
       question.solved_by.push(userToBe.username);
       await question.save();
     }
 
-    res.status(200).json({ message: "✅ Question marked as solved by user", question });
+    // Update Submission model
+    let submission = await Submission.findOne({ userId: userToBe._id });
+    if (!submission) {
+      submission = new Submission({
+        userId: userToBe._id,
+        questions: [{ questionId: questionid, marked: true, date: new Date() }]
+      });
+    } else {
+      const idx = submission.questions.findIndex(q => q.questionId === questionid);
+      if (idx > -1) {
+        submission.questions[idx].marked = true;
+        submission.questions[idx].date = new Date();
+      } else {
+        submission.questions.push({ questionId: questionid, marked: true, date: new Date() });
+      }
+    }
+    await submission.save();
 
+    res.status(200).json({ message: "✅ Question marked as solved by user", question });
   } catch (error) {
     res.status(500).json({ error: "❌ Server error: " + error.message });
   }
@@ -359,35 +375,52 @@ app.patch('/markquestion', middleware, async (req, res) => {
 app.patch('/unmarkquestion', middleware, async (req, res) => {
   try {
     const { questionid, user } = req.body;
-
-    // Validate input
     if (!questionid || !user) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Find the question
     const question = await Question.findOne({ question_id: questionid });
     if (!question) {
       return res.status(404).json({ error: "Question not found" });
     }
 
-    // Find the user
     const userToBe = await User.findOne({ username: user });
     if (!userToBe) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // Remove the user from the solved_by array if present
+    // Update Question model
     const index = question.solved_by.indexOf(userToBe.username);
     if (index !== -1) {
       question.solved_by.splice(index, 1);
       await question.save();
     }
 
-    res.status(200).json({ message: "✅ Question unmarked for user", question });
+    // Update Submission model
+    let submission = await Submission.findOne({ userId: userToBe._id });
+    if (submission) {
+      const idx = submission.questions.findIndex(q => q.questionId === questionid);
+      if (idx > -1) {
+        submission.questions[idx].marked = false;
+        submission.questions[idx].date = new Date();
+        await submission.save();
+      }
+    }
 
+    res.status(200).json({ message: "✅ Question unmarked for user", question });
   } catch (error) {
     res.status(500).json({ error: "❌ Server error: " + error.message });
+  }
+});
+
+app.get('/usersubmissions/:username', async (req, res) => {
+  try {
+    const userToBe = await User.findOne({ username: req.params.username });
+    if (!userToBe) return res.status(404).json({ error: "User not found" });
+    const submission = await Submission.findOne({ userId: userToBe._id });
+    res.status(200).json({ submissions: submission ? submission.questions : [] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
