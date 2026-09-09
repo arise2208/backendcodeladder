@@ -1,24 +1,48 @@
 const mongoose = require('mongoose');
-const Counter = require('./Counter');
 
-const questionSchema = new mongoose.Schema({
-  question_id: { type: Number,   unique: true },
-  title: { type: String, required: true },
-  link: { type: String , required : true , unique : [true , "question with same link already exists "] },
-  tags: [{ type: String }],
-  solved_by: [{ type: String }]
-});
+const questionSchema = new mongoose.Schema(
+  {
+    platform: {
+      type: String,
+      required: true,
+      enum: ['LEETCODE', 'CODEFORCES', 'CODECHEF', 'ATCODER'],
+      index: true
+    },
+    externalId: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    title: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    url: {
+      type: String,
+      required: true,
+      trim: true
+    },
+    tags: {
+      type: [String],
+      default: []
+    },
+    difficulty: {
+      type: String,
+      enum: ['EASY', 'MEDIUM', 'HARD'],
+      default: undefined
+    },
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {}
+    }
+  },
+  { timestamps: true }
+);
 
-questionSchema.pre('save', async function (next) {
-  if (this.isNew) {
-    const counter = await Counter.findOneAndUpdate(
-      { id: 'question_id' },
-      { $inc: { seq: 1 } },
-      { new: true, upsert: true }
-    );
-    this.question_id = counter.seq;
-  }
-  next();
-});
+questionSchema.index(
+  { platform: 1, externalId: 1 },
+  { unique: true }
+);
 
 module.exports = mongoose.model('Question', questionSchema);

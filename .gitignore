@@ -1,2 +1,4 @@
 .env
 node_modules
+setup-proxy.js
+revert-proxy.js

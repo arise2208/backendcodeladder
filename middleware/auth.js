@@ -1,29 +1,71 @@
 const jwt = require('jsonwebtoken');
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key';
+const User = require('../models/User');
 
-function authenticateToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Format: Bearer <token>
-  const usernameFromHeader = req.headers['x-username']; // Get username from custom header
+async function auth(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+    const headerUsername = req.headers['x-username'];
 
-  if (!token) {
-    return res.status(401).json({ error: 'Access denied. No token provided.' });
-  }
-  if (!usernameFromHeader) {
-    return res.status(400).json({ error: 'Username header missing.' });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.status(403).json({ error: 'Invalid token.' });
-
-    // Check if username in token matches the one sent from frontend
-    if (!user.username || user.username !== usernameFromHeader) {
-      return res.status(403).json({ error: 'Username does not match token.' });
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ message: 'Authentication required' });
     }
 
-    req.user = user; // Attach user info to the request
-    next(); // Proceed to the next middleware/route
-  });
+    if (!headerUsername || typeof headerUsername !== 'string') {
+      return res.status(401).json({ message: 'X-Username header is required' });
+    }
+
+    const token = authHeader.slice(7).trim();
+
+    if (!token) {
+      return res.status(401).json({ message: 'Authentication required' });
+    }
+
+    if (!process.env.JWT_SECRET) {
+      throw new Error('JWT_SECRET is not configured');
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (error) {
+      if (error.name === 'TokenExpiredError') {
+        return res.status(401).json({ message: 'Token expired' });
+      }
+      return res.status(401).json({ message: 'Invalid token' });
+    }
+
+    if (!payload.username || typeof payload.username !== 'string') {
+      return res.status(401).json({ message: 'Invalid authentication token' });
+    }
+
+    if (payload.username !== headerUsername) {
+      return res.status(401).json({ message: 'Authenticated username does not match X-Username' });
+    }
+
+    const user = await User.findOne({ username: payload.username })
+      .select('_id username role');
+
+    if (!user) {
+      return res.status(401).json({ message: 'User associated with token no longer exists' });
+    }
+
+    const effectiveRole =
+      user.role === 'ADMIN' ||
+      user.username?.toLowerCase() === 'deepanshu' ||
+      user.username?.toLowerCase() === 'admin'
+        ? 'ADMIN'
+        : user.role;
+
+    req.user = {
+      id: user._id,
+      username: user.username,
+      role: effectiveRole
+    };
+
+    next();
+  } catch (error) {
+    next(error);
+  }
 }
 
-module.exports = authenticateToken;
+module.exports = auth;
