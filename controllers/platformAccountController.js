@@ -1357,6 +1357,11 @@ async function syncCodeChefHistory(req, res) {
       }
     }
 
+    // Skip contest summary / header rows where code is null and solvedAt is null
+    if (!rawCode && !solvedAt && !nameMap.get(rawName.toLowerCase())) {
+      continue;
+    }
+
     let resolvedCode = rawCode;
     let resolvedTitle = rawName;
 
@@ -1606,17 +1611,27 @@ async function fetchCodeChefUserData(req, res) {
 
     const idx = profileHtml.indexOf('problems-solved');
     if (idx !== -1) {
+      const { nameMap } = getCodeChefContestCatalog();
       const end = profileHtml.indexOf('</section>', idx);
       const section = profileHtml.slice(idx, end !== -1 ? end : idx + 60000);
       const spans = Array.from(section.matchAll(/<span[^>]*style="font-size:\s*12px[^>]*>([^<]+)<\/span>/gi)).map(m => m[1].trim());
       spans.forEach(s => {
-        const rawCode = s.replace(/&nbsp;/g, ' ').replace(/[^A-Za-z0-9_]/g, '').toUpperCase();
-        if (rawCode.length >= 2 && rawCode.length <= 15) {
-          solvedCodes.add(rawCode);
+        const cleanName = s.replace(/&nbsp;/g, ' ').trim().toLowerCase();
+        const mappedCode = nameMap.get(cleanName);
+        if (mappedCode) {
+          solvedCodes.add(mappedCode);
+        } else {
+          const rawCode = s.replace(/&nbsp;/g, ' ').replace(/[^A-Za-z0-9_]/g, '').toUpperCase();
+          if (rawCode.length >= 2 && rawCode.length <= 15) {
+            solvedCodes.add(rawCode);
+          }
         }
       });
       const statusLinks = Array.from(section.matchAll(/\/status\/([A-Za-z0-9_]+),/gi)).map(m => m[1].toUpperCase());
-      statusLinks.forEach(c => solvedCodes.add(c));
+      statusLinks.forEach(c => {
+        const mapped = nameMap.get(c.toLowerCase());
+        solvedCodes.add(mapped || c);
+      });
     }
 
     const dailyStatsMatch = profileHtml.match(/var\s+userDailySubmissionsStats\s*=\s*(\[[\s\S]*?\]);/);
