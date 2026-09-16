@@ -1047,14 +1047,55 @@ async function syncSolvedProblems(req, res) {
   if (Array.isArray(codechef) && codechef.length > 0) {
     const ccCodes = codechef.map(s => String(s).toUpperCase().trim()).filter(Boolean);
     if (ccCodes.length > 0) {
-      const ccQuestions = await Question.find({
+      const { codeMap } = getCodeChefContestCatalog();
+      let ccQuestions = await Question.find({
         platform: "CODECHEF",
         externalId: { $in: ccCodes }
-      }).select("_id").lean().catch(() => []);
+      }).select("_id externalId").lean().catch(() => []);
+
+      const existingCodes = new Set((ccQuestions || []).map(q => String(q.externalId).toUpperCase()));
+      const toUpsert = [];
+
+      for (const code of ccCodes) {
+        if (!existingCodes.has(code)) {
+          const info = codeMap.get(code);
+          const title = info?.name || code;
+          const url = info?.url || `https://www.codechef.com/problems/${code}`;
+          const rating = info?.rating || null;
+          const tags = info?.tags || [];
+
+          toUpsert.push({
+            updateOne: {
+              filter: { platform: "CODECHEF", externalId: code },
+              update: {
+                $setOnInsert: {
+                  platform: "CODECHEF",
+                  externalId: code,
+                  title,
+                  url,
+                  rating,
+                  tags,
+                  difficulty: rating ? String(rating) : "N/A"
+                }
+              },
+              upsert: true
+            }
+          });
+        }
+      }
+
+      if (toUpsert.length > 0) {
+        await Question.bulkWrite(toUpsert, { ordered: false }).catch(() => {});
+        ccQuestions = await Question.find({
+          platform: "CODECHEF",
+          externalId: { $in: ccCodes }
+        }).select("_id externalId").lean().catch(() => []);
+      }
+
       for (const q of ccQuestions) {
         opsMap.set(String(q._id), {
           verified: false,
-          verificationMethod: "UNVERIFIED"
+          verificationMethod: "PUBLIC_PROFILE"
         });
       }
     }
