@@ -2,7 +2,6 @@ const mongoose = require('mongoose');
 
 const problemSchema = new mongoose.Schema(
   {
-    // Direct mapping to the Question collection document
     questionId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Question',
@@ -76,7 +75,6 @@ const contestSchema = new mongoose.Schema(
       required: true,
       trim: true
     },
-    // Dynamic per-platform category string - String only, NO ENUM
     // LeetCode: 'WEEKLY' | 'BIWEEKLY'
     // Codeforces: 'DIV1' | 'DIV2' | 'DIV3' | 'DIV4' | 'EDU' | 'GLOBAL' | 'OTHER'
     // CodeChef: 'STARTERS' | 'LONG' | 'COOKOFF'

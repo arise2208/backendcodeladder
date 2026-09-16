@@ -17,14 +17,12 @@ async function getPublicProfile(req, res) {
     throw httpError(404, 'User not found');
   }
 
-  
   const platformAccounts = await PlatformAccount.find({ userId: user._id }).lean();
   const accountsMap = {};
   for (const acc of platformAccounts) {
     accountsMap[acc.platform.toLowerCase()] = acc.handle;
   }
 
-  
   const publicLadders = await Ladder.find({ ownerId: user._id, isPublic: true })
     .sort({ publishedAt: -1, createdAt: -1 })
     .lean();
@@ -55,8 +53,6 @@ async function getPublicProfile(req, res) {
       createdAt: l.createdAt
     };
   });
-
-  // 3. Solved questions data for heatmap & stats
   const solvedQuestionStates = await UserQuestionState.find({
     userId: user._id,
     solved: true
@@ -87,8 +83,6 @@ async function getPublicProfile(req, res) {
     }));
 
   const starredCount = await UserQuestionState.countDocuments({ userId: user._id, starred: true });
-
-  // 4. Fetch user's blogs
   const userBlogs = await Blog.find({ authorId: user._id })
     .select('-comments -content')
     .sort({ createdAt: -1 })

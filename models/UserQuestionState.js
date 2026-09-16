@@ -34,7 +34,7 @@ const userQuestionStateSchema = new mongoose.Schema(
     },
     verificationMethod: {
       type: String,
-      enum: ['LEETCODE_CHALLENGE', 'CODEFORCES_API', 'SCRAPE', 'MANUAL_UNVERIFIED', 'UNVERIFIED'],
+      enum: ['LEETCODE_CHALLENGE', 'CODEFORCES_API', 'CODECHEF_EXTENSION', 'SCRAPE', 'MANUAL_UNVERIFIED', 'UNVERIFIED'],
       default: 'UNVERIFIED'
     }
   },
@@ -49,7 +49,4 @@ userQuestionStateSchema.index({ userId: 1, solved: 1 });
 userQuestionStateSchema.index({ userId: 1, starred: 1 });
 userQuestionStateSchema.index({ userId: 1, verified: 1 });
 
-module.exports = mongoose.model(
-  'UserQuestionState',
-  userQuestionStateSchema
-);
+module.exports = mongoose.model('UserQuestionState', userQuestionStateSchema);

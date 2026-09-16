@@ -159,7 +159,7 @@ async function buildCatalog() {
     console.log('Loading LeetCode & CodeChef questions from questions_bulk_payload.json...');
     const bulkData = JSON.parse(fs.readFileSync(bulkPayloadPath, 'utf8'));
     const questionsList = bulkData.questions || (Array.isArray(bulkData) ? bulkData : []);
-    
+
     questionsList.forEach((q) => {
       const plat = (q.platform || 'LEETCODE').toUpperCase();
       const extId = String(q.externalId || '').trim();

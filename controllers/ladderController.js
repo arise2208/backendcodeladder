@@ -70,8 +70,6 @@ async function listLadders(req, res) {
         role: memberRole.get(String(ladder._id))
       }))
     ];
-
-    // Fetch question counts and member counts for all ladders
     const allLadderIds = allLadders.map(l => l._id);
 
     const [questionCounts, memberCounts, solvedCounts] = await Promise.all([
@@ -83,7 +81,6 @@ async function listLadders(req, res) {
         { $match: { ladderId: { $in: allLadderIds } } },
         { $group: { _id: '$ladderId', count: { $sum: 1 } } }
       ]).catch(() => []),
-      // Get solved counts for the current user across all ladders
       (async () => {
         try {
           const allLadderQuestions = await LadderQuestion.find({
@@ -183,7 +180,6 @@ async function getLadder(req, res) {
             }
           }));
         } catch {
-          // Graceful fallback
         }
       }
 
@@ -972,7 +968,6 @@ async function voteLadder(req, res) {
   });
 }
 
-
 async function transferOwnership(req, res) {
   const ladderId = req.ladder._id;
   const { newOwnerUsername } = req.body;
@@ -992,15 +987,9 @@ async function transferOwnership(req, res) {
   }
 
   const oldOwnerId = req.ladder.ownerId;
-
-  // 1. Update ladder ownerId
   req.ladder.ownerId = newOwner._id;
   await req.ladder.save();
-
-  // 2. Remove new owner from LadderMember if they were a member
   await LadderMember.deleteOne({ ladderId, userId: newOwner._id });
-
-  // 3. Add old owner as a WRITE member so they retain collaborator rights
   await LadderMember.findOneAndUpdate(
     { ladderId, userId: oldOwnerId },
     { $set: { role: "WRITE" } },

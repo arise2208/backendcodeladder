@@ -3,17 +3,12 @@ const mongoose = require('mongoose');
 
 jest.setTimeout(30000);
 
-
-
 require('dotenv').config();
-
 
 const app = require('../app');
 
 const MONGODB_URI =
   process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/codeladder';
-
-
 
 const User = require('../models/User');
 const Question = require('../models/Question');
@@ -61,18 +56,12 @@ let question1;
 let question2;
 let ladderId;
 
-
-/* ---------------------------------------------------------
-   Helpers
---------------------------------------------------------- */
-
 function auth(token, username) {
   return {
     Authorization: `Bearer ${token}`,
     'X-Username': username
   };
 }
-
 
 async function registerAndLogin(user) {
   const register = await request(app)
@@ -94,11 +83,6 @@ async function registerAndLogin(user) {
 
   return login.body.token;
 }
-
-
-/* ---------------------------------------------------------
-   Setup
---------------------------------------------------------- */
 
 beforeAll(async () => {
      await mongoose.connect(MONGODB_URI);
@@ -136,10 +120,6 @@ beforeAll(async () => {
 
   adminToken = login.body.token;
 });
-
-/* ---------------------------------------------------------
-   Cleanup
---------------------------------------------------------- */
 
 afterAll(async () => {
   try {
@@ -241,16 +221,8 @@ afterAll(async () => {
     await mongoose.disconnect();
   }
 });
-/* =========================================================
-   TESTS
-========================================================= */
 
 describe('CodeLadder API', () => {
-
-
-  /* =======================================================
-     HEALTH
-  ======================================================= */
 
   describe('Health', () => {
 
@@ -270,11 +242,6 @@ describe('CodeLadder API', () => {
     });
 
   });
-
-
-  /* =======================================================
-     AUTH
-  ======================================================= */
 
   describe('Authentication', () => {
 
@@ -310,7 +277,6 @@ describe('CodeLadder API', () => {
       });
     });
 
-
     test('POST /api/auth/register rejects invalid username', async () => {
 
       const res = await request(app)
@@ -324,7 +290,6 @@ describe('CodeLadder API', () => {
       expect(res.statusCode).toBe(400);
     });
 
-
     test('POST /api/auth/register rejects short password', async () => {
 
       const res = await request(app)
@@ -337,7 +302,6 @@ describe('CodeLadder API', () => {
 
       expect(res.statusCode).toBe(400);
     });
-
 
     test('POST /api/auth/login', async () => {
 
@@ -357,7 +321,6 @@ describe('CodeLadder API', () => {
         .toBeTruthy();
     });
 
-
     test('POST /api/auth/login rejects wrong password', async () => {
 
       const res = await request(app)
@@ -369,7 +332,6 @@ describe('CodeLadder API', () => {
 
       expect(res.statusCode).toBe(401);
     });
-
 
     test('GET /api/auth/me', async () => {
 
@@ -392,7 +354,6 @@ describe('CodeLadder API', () => {
         });
     });
 
-
     test('GET /api/auth/me rejects missing authentication', async () => {
 
       const res = await request(app)
@@ -400,7 +361,6 @@ describe('CodeLadder API', () => {
 
       expect(res.statusCode).toBe(401);
     });
-
 
     test('GET /api/auth/me succeeds with only Bearer token and no X-Username', async () => {
       const res = await request(app)
@@ -444,11 +404,6 @@ describe('CodeLadder API', () => {
 
   });
 
-
-  /* =======================================================
-     QUESTIONS
-  ======================================================= */
-
   describe('Questions', () => {
 
     test('GET /api/questions', async () => {
@@ -465,7 +420,6 @@ describe('CodeLadder API', () => {
       expect(res.body.pagination)
         .toBeDefined();
     });
-
 
     test('GET /api/questions supports filters and pagination', async () => {
 
@@ -486,7 +440,6 @@ describe('CodeLadder API', () => {
       expect(res.body.pagination.limit)
         .toBe(10);
     });
-
 
     test('POST /api/questions requires admin', async () => {
 
@@ -509,7 +462,6 @@ describe('CodeLadder API', () => {
 
       expect(res.statusCode).toBe(403);
     });
-
 
     test('POST /api/questions creates first question', async () => {
 
@@ -541,7 +493,6 @@ describe('CodeLadder API', () => {
       question1 = res.body.question;
     });
 
-
     test('POST /api/questions creates second question', async () => {
 
       const res = await request(app)
@@ -566,7 +517,6 @@ describe('CodeLadder API', () => {
       question2 = res.body.question;
     });
 
-
     test('GET /api/questions/:questionId', async () => {
 
       const res = await request(app)
@@ -579,7 +529,6 @@ describe('CodeLadder API', () => {
       expect(res.body.question._id)
         .toBe(question1._id);
     });
-
 
     test('GET /api/questions/:questionId returns 404', async () => {
 
@@ -594,7 +543,6 @@ describe('CodeLadder API', () => {
       expect(res.statusCode).toBe(404);
     });
 
-
     test('GET /api/questions/:questionId rejects invalid ObjectId', async () => {
 
       const res = await request(app)
@@ -604,7 +552,6 @@ describe('CodeLadder API', () => {
 
       expect(res.statusCode).toBe(400);
     });
-
 
     test('PUT /api/questions/:questionId updates question', async () => {
 
@@ -628,7 +575,6 @@ describe('CodeLadder API', () => {
         .toBe('Updated Test Question One');
     });
 
-
     test('PUT /api/questions/:questionId rejects normal user', async () => {
 
       const res = await request(app)
@@ -649,11 +595,6 @@ describe('CodeLadder API', () => {
     });
 
   });
-
-
-  /* =======================================================
-     GLOBAL QUESTION STATE
-  ======================================================= */
 
   describe('Global Question State', () => {
 
@@ -678,7 +619,6 @@ describe('CodeLadder API', () => {
       expect(res.body.state.starred)
         .toBe(false);
     });
-
 
     test('POST solve question returns 501 Not Implemented', async () => {
       const res = await request(app)
@@ -705,11 +645,12 @@ describe('CodeLadder API', () => {
         .send({ codeforces: oversized });
       expect(resOversized.statusCode).toBe(400);
 
-      // Sync question1
+      // Sync question1 — it is a LEETCODE question, so use the leetcode channel.
+      // No verified LeetCode account linked => verificationMethod=UNVERIFIED => unverifiedCount >= 1.
       const resSync = await request(app)
         .post('/api/platform-accounts/sync-solved')
         .set(auth(ownerToken, users.owner.username))
-        .send({ codeforces: [question1.externalId] });
+        .send({ leetcode: [question1.externalId] });
       expect(resSync.statusCode).toBe(200);
       expect(resSync.body.unverifiedCount).toBeGreaterThanOrEqual(1);
 
@@ -720,7 +661,6 @@ describe('CodeLadder API', () => {
       expect(state.solved).toBe(true);
       expect(state.verified).toBe(false);
     });
-
 
     test('PUT star question', async () => {
 
@@ -744,7 +684,6 @@ describe('CodeLadder API', () => {
         .toBe(true);
     });
 
-
     test('PUT star rejects non-boolean', async () => {
 
       const res = await request(app)
@@ -763,7 +702,6 @@ describe('CodeLadder API', () => {
 
       expect(res.statusCode).toBe(400);
     });
-
 
     test('DELETE star question', async () => {
 
@@ -784,19 +722,13 @@ describe('CodeLadder API', () => {
         .toBe(false);
     });
 
-
     test('GET /api/me/questions/solved', async () => {
 
+      // /solve is retired (501). Use sync-solved to mark question1 as solved.
       await request(app)
-        .post(
-          `/api/questions/${question1._id}/solve`
-        )
-        .set(
-          auth(
-            ownerToken,
-            users.owner.username
-          )
-        );
+        .post('/api/platform-accounts/sync-solved')
+        .set(auth(ownerToken, users.owner.username))
+        .send({ leetcode: [question1.externalId] });
 
       const res = await request(app)
         .get('/api/me/questions/solved')
@@ -819,7 +751,6 @@ describe('CodeLadder API', () => {
         )
       ).toBe(true);
     });
-
 
     test('GET /api/me/questions/starred', async () => {
 
@@ -857,11 +788,6 @@ describe('CodeLadder API', () => {
 
   });
 
-
-  /* =======================================================
-     PUBLIC USERS
-  ======================================================= */
-
   describe('Public Users', () => {
 
     test('GET /api/users/:username', async () => {
@@ -876,7 +802,6 @@ describe('CodeLadder API', () => {
       expect(res.body.user.username)
         .toBe(users.owner.username);
     });
-
 
     test('GET /api/users/:username/stats', async () => {
 
@@ -900,7 +825,6 @@ describe('CodeLadder API', () => {
         );
     });
 
-
     test('GET nonexistent user returns 404', async () => {
 
       const res = await request(app)
@@ -912,11 +836,6 @@ describe('CodeLadder API', () => {
     });
 
   });
-
-
-  /* =======================================================
-     LADDERS
-  ======================================================= */
 
   describe('Ladders', () => {
 
@@ -937,7 +856,6 @@ describe('CodeLadder API', () => {
         Array.isArray(res.body.ladders)
       ).toBe(true);
     });
-
 
     test('POST /api/ladders creates ladder', async () => {
 
@@ -968,7 +886,6 @@ describe('CodeLadder API', () => {
         res.body.ladder._id;
     });
 
-
     test('POST /api/ladders rejects empty title', async () => {
 
       const res = await request(app)
@@ -985,7 +902,6 @@ describe('CodeLadder API', () => {
 
       expect(res.statusCode).toBe(400);
     });
-
 
     test('GET /api/ladders/:ladderId', async () => {
 
@@ -1009,7 +925,6 @@ describe('CodeLadder API', () => {
         .toBe(ladderId);
     });
 
-
     test('PUT /api/ladders/:ladderId', async () => {
 
       const res = await request(app)
@@ -1031,7 +946,6 @@ describe('CodeLadder API', () => {
       expect(res.body.ladder.title)
         .toBe('Updated Test Ladder');
     });
-
 
     test('POST add first ladder question', async () => {
 
@@ -1060,7 +974,6 @@ describe('CodeLadder API', () => {
       ).toBe(1);
     });
 
-
     test('POST add second ladder question', async () => {
 
       const res = await request(app)
@@ -1083,7 +996,6 @@ describe('CodeLadder API', () => {
         res.body.ladderQuestion.order
       ).toBe(2);
     });
-
 
     test('GET ladder returns questions', async () => {
 
@@ -1110,7 +1022,6 @@ describe('CodeLadder API', () => {
         .toBeDefined();
     });
 
-
     test('duplicate ladder question is rejected', async () => {
 
       const res = await request(app)
@@ -1130,7 +1041,6 @@ describe('CodeLadder API', () => {
       expect(res.statusCode)
         .not.toBe(201);
     });
-
 
     test('PUT reorder ladder questions', async () => {
 
@@ -1163,7 +1073,6 @@ describe('CodeLadder API', () => {
         .toBe('Ladder reordered');
     });
 
-
     test('reorder rejects duplicate orders', async () => {
 
       const res = await request(app)
@@ -1194,11 +1103,6 @@ describe('CodeLadder API', () => {
 
   });
 
-
-  /* =======================================================
-     LADDER PRACTICE
-  ======================================================= */
-
   describe('Ladder Practice', () => {
 
     test('GET practice state', async () => {
@@ -1219,7 +1123,6 @@ describe('CodeLadder API', () => {
       expect(res.body.practice.practised)
         .toBe(false);
     });
-
 
     test('POST practise question', async () => {
 
@@ -1242,7 +1145,6 @@ describe('CodeLadder API', () => {
       expect(res.body.practice.practisedAt)
         .toBeTruthy();
     });
-
 
     test('DELETE unpractise question', async () => {
 
@@ -1267,11 +1169,6 @@ describe('CodeLadder API', () => {
     });
 
   });
-
-
-  /* =======================================================
-     REVISION
-  ======================================================= */
 
   describe('Revision', () => {
 
@@ -1301,7 +1198,6 @@ describe('CodeLadder API', () => {
       ).toBeTruthy();
     });
 
-
     test('GET revision', async () => {
 
       const res = await request(app)
@@ -1325,7 +1221,6 @@ describe('CodeLadder API', () => {
       ).toBe(true);
     });
 
-
     test('PUT revision rejects invalid mode', async () => {
 
       const res = await request(app)
@@ -1346,11 +1241,6 @@ describe('CodeLadder API', () => {
     });
 
   });
-
-
-  /* =======================================================
-     COLLABORATION
-  ======================================================= */
 
   describe('Collaboration', () => {
 
@@ -1380,7 +1270,6 @@ describe('CodeLadder API', () => {
         });
     });
 
-
     test('GET members', async () => {
 
       const res = await request(app)
@@ -1404,7 +1293,6 @@ describe('CodeLadder API', () => {
       ).toBe(true);
     });
 
-
     test('READ member can access ladder', async () => {
 
       const res = await request(app)
@@ -1424,7 +1312,6 @@ describe('CodeLadder API', () => {
         .toBe('READ');
     });
 
-
     test('READ member cannot update ladder', async () => {
 
       const res = await request(app)
@@ -1443,7 +1330,6 @@ describe('CodeLadder API', () => {
 
       expect(res.statusCode).toBe(403);
     });
-
 
     test('Owner changes READ member to WRITE', async () => {
 
@@ -1467,7 +1353,6 @@ describe('CodeLadder API', () => {
         .toBe('WRITE');
     });
 
-
     test('WRITE member can update ladder', async () => {
 
       const res = await request(app)
@@ -1489,7 +1374,6 @@ describe('CodeLadder API', () => {
       expect(res.body.ladder.title)
         .toBe('Updated By Write Member');
     });
-
 
     test('Owner adds second WRITE member', async () => {
 
@@ -1513,7 +1397,6 @@ describe('CodeLadder API', () => {
       expect(res.body.member.role)
         .toBe('WRITE');
     });
-
 
     test('WRITE member reaches ladder question API', async () => {
 
@@ -1540,7 +1423,6 @@ describe('CodeLadder API', () => {
         .not.toBe(403);
     });
 
-
     test('Owner removes member', async () => {
 
       const res = await request(app)
@@ -1560,7 +1442,6 @@ describe('CodeLadder API', () => {
         .toBe('Member removed');
     });
 
-
     test('Removed member cannot access ladder', async () => {
 
       const res = await request(app)
@@ -1578,11 +1459,6 @@ describe('CodeLadder API', () => {
     });
 
   });
-
-
-  /* =======================================================
-     PLATFORM ACCOUNTS
-  ======================================================= */
 
   describe('Platform Accounts', () => {
 
@@ -1603,7 +1479,6 @@ describe('CodeLadder API', () => {
         Array.isArray(res.body.accounts)
       ).toBe(true);
     });
-
 
     test('PUT /api/platform-accounts/:platform creates account', async () => {
 
@@ -1633,7 +1508,6 @@ describe('CodeLadder API', () => {
         .toBe(false);
     });
 
-
     test('PUT platform account updates handle', async () => {
 
       const res = await request(app)
@@ -1656,7 +1530,6 @@ describe('CodeLadder API', () => {
         .toBe('updated_test_handle');
     });
 
-
     test('PUT unsupported platform rejects request', async () => {
 
       const res = await request(app)
@@ -1676,6 +1549,61 @@ describe('CodeLadder API', () => {
       expect(res.statusCode).toBe(400);
     });
 
+
+    test("POST /api/platform-accounts/codechef/submission records verified submission", async () => {
+      await request(app)
+        .put("/api/platform-accounts/codechef")
+        .set(auth(ownerToken, users.owner.username))
+        .send({ handle: "cc_tester" });
+
+      const res = await request(app)
+        .post("/api/platform-accounts/codechef/submission")
+        .set(auth(ownerToken, users.owner.username))
+        .send({
+          handle: "cc_tester",
+          submission: {
+            problemCode: "TEST_CC_1",
+            title: "Test CodeChef Problem",
+            solvedAt: new Date().toISOString()
+          }
+        });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+
+      const state = await UserQuestionState.findOne({
+        userId: (await User.findOne({ username: users.owner.username }))._id,
+        questionId: res.body.questionId
+      });
+      expect(state).toBeTruthy();
+      expect(state.verified).toBe(true);
+      expect(state.verificationMethod).toBe("CODECHEF_EXTENSION");
+    });
+
+    test("POST /api/platform-accounts/codechef/sync resolves problem titles and syncs verified history", async () => {
+      const res = await request(app)
+        .post("/api/platform-accounts/codechef/sync")
+        .set(auth(ownerToken, users.owner.username))
+        .send({
+          handle: "cc_tester",
+          problems: [
+            { name: "Swish Game", contest: "Starters 171 (Rated)" },
+            { name: "White Wall", contest: "Starters 171 (Rated)" },
+            "FLOW001"
+          ]
+        });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.syncedCount).toBeGreaterThanOrEqual(2);
+
+      const ownerUser = await User.findOne({ username: users.owner.username });
+      const verifiedStates = await UserQuestionState.find({
+        userId: ownerUser._id,
+        verificationMethod: "CODECHEF_EXTENSION"
+      });
+      expect(verifiedStates.length).toBeGreaterThanOrEqual(2);
+    });
 
     test('DELETE platform account', async () => {
 
@@ -1698,11 +1626,6 @@ describe('CodeLadder API', () => {
 
   });
 
-
-  /* =======================================================
-     ADMIN
-  ======================================================= */
-
   describe('Admin', () => {
 
     test('GET /api/admin/users rejects normal user', async () => {
@@ -1718,7 +1641,6 @@ describe('CodeLadder API', () => {
 
       expect(res.statusCode).toBe(403);
     });
-
 
     test('GET /api/admin/users', async () => {
 
@@ -1740,7 +1662,6 @@ describe('CodeLadder API', () => {
       expect(res.body.pagination)
         .toBeDefined();
     });
-
 
     test('GET /api/admin/users/:username', async () => {
 
@@ -1764,7 +1685,6 @@ describe('CodeLadder API', () => {
         .toBe(users.owner.email);
     });
 
-
     test('GET /api/admin/ladders', async () => {
 
       const res = await request(app)
@@ -1785,11 +1705,6 @@ describe('CodeLadder API', () => {
 
   });
 
-
-  /* =======================================================
-     AUTHENTICATION COVERAGE
-  ======================================================= */
-
   describe('Protected API authentication', () => {
 
     test('GET /api/ladders rejects unauthenticated request', async () => {
@@ -1800,7 +1715,6 @@ describe('CodeLadder API', () => {
       expect(res.statusCode).toBe(401);
     });
 
-
     test('GET /api/me/questions/solved rejects unauthenticated request', async () => {
 
       const res = await request(app)
@@ -1809,7 +1723,6 @@ describe('CodeLadder API', () => {
       expect(res.statusCode).toBe(401);
     });
 
-
     test('GET /api/platform-accounts rejects unauthenticated request', async () => {
 
       const res = await request(app)
@@ -1817,7 +1730,6 @@ describe('CodeLadder API', () => {
 
       expect(res.statusCode).toBe(401);
     });
-
 
     test('POST /api/questions rejects unauthenticated request', async () => {
 
@@ -1829,6 +1741,9 @@ describe('CodeLadder API', () => {
           title: 'Unauthorized',
           url: 'https://example.com'
         });
+
+      expect(res.statusCode).toBe(401);
+    });
 
     test('POST /api/ladders/:ladderId/transfer-ownership transfers ownership', async () => {
       const resTransfer = await request(app)
@@ -1845,7 +1760,7 @@ describe('CodeLadder API', () => {
         .send({ title: 'Transferred Ladder Title' });
       expect(resUpdate.statusCode).toBe(200);
 
-      // Transfer back to original owner
+      // Transfer back to original owner for subsequent tests
       const resBack = await request(app)
         .post(`/api/ladders/${ladderId}/transfer-ownership`)
         .set(auth(writeToken, users.write.username))
@@ -1872,14 +1787,12 @@ describe('CodeLadder API', () => {
         .set(auth(ownerToken, users.owner.username))
         .send({ content: 'Comment <script>steal()</script>' });
       expect(resComment.statusCode).toBe(201);
-      const comments = resComment.body.comments;
-      expect(comments[comments.length - 1].content).not.toContain('<script>');
+      // addComment endpoint returns { message, comment } (singular)
+      const savedComment = resComment.body.comment;
+      expect(savedComment).toBeTruthy();
+      expect(savedComment.content).not.toContain('<script>');
 
       await request(app).delete(`/api/blogs/${blogId}`).set(auth(ownerToken, users.owner.username));
-    });
-
-
-      expect(res.statusCode).toBe(401);
     });
 
   });

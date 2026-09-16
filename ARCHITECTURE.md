@@ -18,6 +18,7 @@ CodeLadder Backend is a high-performance RESTful API and competitive programming
   - `POST /api/auth/register`
   - `POST /api/auth/login`
   - `GET /api/auth/me`
+  - `POST /api/auth/logout-all`
 - **Key Functions / Classes**:
   - `controllers/authController.js`: `register()`, `login()`, `me()`, `signToken()`
   - `middleware/auth.js`: `auth()`, `optionalAuth()`
@@ -25,9 +26,13 @@ CodeLadder Backend is a high-performance RESTful API and competitive programming
 - **Internal Modules**: `models/User.js`, `utils/httpError.js`, `utils/asyncHandler.js`
 - **Data Read/Written**: MongoDB `users` collection.
 - **Known Edge Cases / Fragile Spots**:
-  - Requires matching `Authorization: Bearer <token>` AND `X-Username` header to prevent cross-account impersonation.
-  - Startup routine in `server.js` and `middleware/auth.js` auto-promotes `deepanshu` and `admin` usernames to `ADMIN` role.
-  - Test suite in `tests/api.test.js` asserts `user` is `{ username, role }` without `id`, but controller returns `{ id, username, role }`.
+  - **JWT-only auth**: `Authorization: Bearer <token>` is the sole credential. `X-Username` header is no longer required or validated.
+  - **Token revocation**: Each user has a `tokenVersion: Number` field (default 0). Every `auth()` call DB-checks that `payload.tokenVersion === user.tokenVersion`. Call `POST /api/auth/logout-all` to increment `tokenVersion` and invalidate all prior tokens.
+  - **JWT TTL**: `JWT_EXPIRES_IN` defaults to `1d` (reduced from `7d`). `JWT_SECRET` must be ≥ 32 characters (enforced at startup).
+  - **Account lockout**: After `MAX_LOGIN_ATTEMPTS` (default 10) consecutive failures the account is locked for `LOCK_DURATION_MINUTES` (default 15 min). Responds with HTTP 429 + `Retry-After` header. Counters reset on successful login.
+  - **Password strength**: New registrations require ≥ 8 chars, at least one uppercase, one lowercase, one digit. Existing password hashes are unaffected.
+  - **Timing-safe login**: If the username doesn't exist, a dummy bcrypt compare is performed to prevent username enumeration via response timing.
+  - **Admin seeding**: Admin promotion is never automatic. Use `npm run seed:admin` (reads `ADMIN_SEED_USERNAME`, `ADMIN_SEED_EMAIL`, `ADMIN_SEED_PASSWORD` env vars).
 
 ### 2.2 In-Memory Question Catalog & Problem Search
 - **Purpose**: Fast multi-filter searching, pagination, and tag taxonomy normalization across 22,000+ competitive programming questions.
@@ -66,8 +71,9 @@ CodeLadder Backend is a high-performance RESTful API and competitive programming
 - **Internal Modules**: `models/UserQuestionState.js`, `models/Question.js`, `services/questionCatalog.js`, `utils/httpError.js`
 - **Data Read/Written**: MongoDB `userquestionstates` collection.
 - **Known Edge Cases / Fragile Spots**:
-  - `solve()` and `unsolve()` endpoints currently throw HTTP 403 because manual solving was disabled in favor of automated platform syncing. This causes 4 failures in `tests/api.test.js`.
-  - The 2-minute freeze rule allows unsolving only within 120 seconds of the solve timestamp.
+  - `solve()` and `unsolve()` at `POST /api/questions/:id/solve` and `POST /api/questions/:id/unsolve` now return **HTTP 501 Not Implemented**. Manual solve marking is retired; use `POST /api/platform-accounts/sync-solved` instead.
+  - `UserQuestionState` model now includes `verified: Boolean (default: false)` and `verificationMethod: enum ['LEETCODE_CHALLENGE', 'CODEFORCES_API', 'SCRAPE', 'MANUAL_UNVERIFIED', 'UNVERIFIED'] (default: 'UNVERIFIED')` fields.
+  - Compound index `{ userId: 1, verified: 1 }` added to `UserQuestionState`.
 
 ### 2.4 Ladders & Curated Practice Sheets
 - **Purpose**: Create, reorder, manage, publish, and search practice problem ladders, with built-in support for default templates (Blind 75, NeetCode 150, CP-31, CF Div 2).
@@ -83,8 +89,9 @@ CodeLadder Backend is a high-performance RESTful API and competitive programming
   - `DELETE /api/ladders/:ladderId/questions/:questionId`
   - `POST /api/ladders/:ladderId/publish`
   - `POST /api/ladders/:ladderId/vote`
+  - `POST /api/ladders/:ladderId/transfer-ownership` *(new)*
 - **Key Functions / Classes**:
-  - `controllers/ladderController.js`: `createLadder()`, `listLadders()`, `getLadder()`, `updateLadder()`, `deleteLadder()`, `addQuestion()`, `removeQuestion()`, `reorderQuestions()`, `publishLadder()`, `listMarketplaceLadders()`, `voteLadder()`
+  - `controllers/ladderController.js`: `createLadder()`, `listLadders()`, `getLadder()`, `updateLadder()`, `deleteLadder()`, `addQuestion()`, `removeQuestion()`, `reorderQuestions()`, `publishLadder()`, `listMarketplaceLadders()`, `voteLadder()`, `transferOwnership()` *(new)*
   - `services/defaultLadders.js`: `getDefaultLadder()`, `getDefaultMarketplaceLadders()`
   - `middleware/ladderAccess.js`: `loadLadderAccess()`, `requireLadderAccess()`, `requireLadderWrite()`, `requireLadderOwner()`
 - **External Dependencies**: `mongoose` (^9.9.5)
@@ -149,9 +156,11 @@ CodeLadder Backend is a high-performance RESTful API and competitive programming
 - **Internal Modules**: `models/Blog.js`, `models/User.js`
 - **Data Read/Written**: MongoDB `blogs` collection (stores embedded `comments` schema).
 - **Known Edge Cases / Fragile Spots**:
-  - Strict quota: max 5 blogs per user (`MAX_BLOGS_PER_USER = 5`).
+  - Strict quota: max 5 blogs per user (`MAX_BLOGS_PER_USER = 5`). Max 500 comments per blog (`MAX_COMMENTS_PER_BLOG = 500`).
   - Character limits: max 50,000 characters per blog body; 5,000 per comment.
+  - **XSS sanitization**: `sanitizeInput()` helper strips `<script>` blocks, `on*=` event attributes, and `javascript:` URIs from blog titles, content, and comment content on create and update.
   - Votes support `UPVOTE` and `DOWNVOTE` (or legacy `LIKE`/`DISLIKE`). Repeated click toggles/clears the vote.
+  - `createBlog` response now includes `content` field alongside `title`, `summary`, etc.
 
 ### 2.8 Platform Account Integration & Verification
 - **Purpose**: Link external competitive programming handles (LeetCode, Codeforces, CodeChef, AtCoder), verify ownership via submission challenges, and batch sync solved problems.
@@ -170,7 +179,13 @@ CodeLadder Backend is a high-performance RESTful API and competitive programming
 - **Internal Modules**: `models/PlatformAccount.js`, `models/UserQuestionState.js`, `models/Question.js`
 - **Data Read/Written**: MongoDB `platformaccounts`, `userquestionstates` collections.
 - **Known Edge Cases / Fragile Spots**:
-  - `syncSolvedProblems` accepts up to 10MB JSON payloads containing external IDs or question titles, and bulk upserts into `UserQuestionState`.
+  - `syncSolvedProblems` enforces a per-platform cap of **2,000 problems** and a total cap of **5,000 problems** per request. Exceeding either returns HTTP 400.
+  - **Verification logic per platform**:
+    - *Codeforces*: if CF handle is linked, attempts live `codeforces.com/api/user.status` lookup; marks `CODEFORCES_API` if verified, else `UNVERIFIED`.
+    - *LeetCode*: marks `LEETCODE_CHALLENGE` if account `verified=true`, else `UNVERIFIED`.
+    - *CodeChef / AtCoder*: always marks `UNVERIFIED`.
+  - Response now includes `verifiedCount` and `unverifiedCount` alongside `matchedCount`.
+  - LC slug lookup searches both lowercased slugs and original-case externalIds to handle case mismatches.
   - LeetCode challenge verification requires user to submit specific code containing an auth token.
 
 ### 2.9 Multi-Platform Contest Upsolving
@@ -184,7 +199,7 @@ CodeLadder Backend is a high-performance RESTful API and competitive programming
 - **Internal Modules**: `models/Contest.js`, `models/Question.js`
 - **Data Read/Written**: MongoDB `contests` collection.
 - **Known Edge Cases / Fragile Spots**:
-  - Platform field is string (no enum) to allow dynamic platforms.
+  - Platform field now has `enum: ['CODEFORCES', 'LEETCODE', 'CODECHEF', 'ATCODER']` constraint on `models/Contest.js`.
   - Categories are dynamic strings (`DIV1`, `DIV2`, `EDU`, `STARTERS`, `WEEKLY`, etc.).
 
 ### 2.10 Public User Profiles & Heatmap Statistics
@@ -214,7 +229,7 @@ CodeLadder Backend is a high-performance RESTful API and competitive programming
   - `middleware/admin.js`: Checks `req.user.role === 'ADMIN'`.
 - **External Dependencies**: `bcrypt` (^6.0.0), `mongoose` (^9.9.5)
 - **Internal Modules**: All models.
-- **Data Read/Written**: Cascading updates and deletions across user data.
+- **Data Read/Written**: Cascading updates and deletions across user data. Audit log entries written to `auditlogs` collection before `deleteUser()` and `deleteLadder()` (fields: `action`, `adminId`, `adminUsername`, `targetType`, `targetId`, `details`, `ip`, `createdAt`).
 
 ### 2.12 Diagnostics & Health Check
 - **Purpose**: Ping endpoint reporting server availability and MongoDB connection state.
@@ -225,7 +240,8 @@ CodeLadder Backend is a high-performance RESTful API and competitive programming
 - **External Dependencies**: `mongoose` (^9.9.5)
 - **Data Read/Written**: Inspects `mongoose.connection.readyState`.
 - **Known Edge Cases / Fragile Spots**:
-  - Integration tests in `tests/api.test.js` assert exact equality with `{ ok: true, service: 'codeladder-api' }`. Returning `database` state causes test assertion failure.
+  - Returns HTTP **200** with `{ ok: true, service: 'codeladder-api', database: { connected: true, ... } }` when MongoDB `readyState === 1`.
+  - Returns HTTP **503** with `{ ok: false, database: { connected: false } }` when disconnected.
 
 ---
 
@@ -266,11 +282,13 @@ CodeLadder Backend is a high-performance RESTful API and competitive programming
 │
 ├── middleware/                     # Express request pipeline filters and guards.
 │   ├── admin.js                    # Guard requiring req.user.role === 'ADMIN'.
-│   ├── auth.js                     # JWT Bearer verification + X-Username validation + optionalAuth non-blocking parser.
-│   ├── errorHandler.js             # Centralized JSON error serializer mapping httpError status codes.
+│   ├── auth.js                     # JWT Bearer verification + tokenVersion revocation check + optionalAuth non-blocking parser.
+│   ├── errorHandler.js             # Centralized JSON error serializer; omits stack traces in production.
 │   ├── ladderAccess.js             # Multi-tier ladder permissions loader (public reader, member READ, member WRITE, OWNER).
+│   ├── mongoSanitize.js            # Strips Mongo operator keys ($, .) from req.body and req.params (Express 5 compatible).
 │   ├── notFound.js                 # 404 JSON fallback for unmatched routes.
-│   ├── rateLimit.js                # Tiered IP-based rate limiters (login, register, general, progress, admin, catalog).
+│   ├── rateLimit.js                # Tiered IP-based rate limiters (login, register, general, progress, admin, catalog, syncSolved).
+│   ├── requestId.js                # Attaches X-Request-Id UUID to every request for log traceability.
 │   └── validateObjectId.js         # Validates MongoDB ObjectIds or maps catalog identifiers before hitting controllers.
 │
 ├── models/                         # Mongoose schemas, validation rules, and collection indices.
@@ -379,16 +397,17 @@ server.js
 ### 5.1 Databases & Data Stores
 - **Primary Datastore**: **MongoDB** (Local `mongodb://127.0.0.1:27017/codeladder` or MongoDB Atlas replica set).
 - **Collections**:
-  - `users`: User identity, credential hashes, roles (`USER`, `ADMIN`).
+  - `users`: User identity, credential hashes, roles (`USER`, `ADMIN`), `tokenVersion: Number (default: 0)` for JWT revocation, `loginAttempts: Number` and `lockUntil: Date` for brute-force lockout.
   - `questions`: 22k+ question records with platform, rating, tags, difficulty, externalId.
-  - `userquestionstates`: Global per-user problem solve timestamps (`firstSolvedAt`, `solvedAt`) and star bookmarks.
+  - `userquestionstates`: Per-user problem solve timestamps (`firstSolvedAt`, `solvedAt`), star bookmarks, `verified: Boolean`, `verificationMethod: enum`.
   - `ladders`: Practice ladder definitions, public status, owner reference, vote counters.
   - `ladderquestions`: Ordered association between a ladder and its questions.
   - `laddermembers`: Team collaboration access permissions (`READ`, `WRITE`).
   - `userladderquestionpractices`: User blind practice status flags within specific ladders.
   - `blogs`: Community blog posts, tags, markdown content, upvotes, views, comments.
   - `platformaccounts`: Connected LeetCode, Codeforces, CodeChef, and AtCoder handles with verification tokens.
-  - `contests`: Historical contest records for Codeforces, LeetCode, and CodeChef.
+  - `contests`: Historical contest records for Codeforces, LeetCode, and CodeChef. Platform field now has enum constraint.
+  - `auditlogs` *(new)*: Admin action audit trail. Written before destructive admin operations (`deleteUser`, `deleteLadder`).
 - **In-Memory Cache Layer**:
   - `services/questionCatalog.js`: In-memory index of all 22k+ problems indexed by `_id`, `platform:externalId`, and normalized tags. Bootstrapped from `data/questions.json` and synced from MongoDB at startup.
 
@@ -400,7 +419,14 @@ server.js
 | `MONGODB_URI` | **Required** | `mongodb://127.0.0.1:27017/codeladder` | Connection string for MongoDB database instance. |
 | `JWT_SECRET` | **Required** | `[random-secure-string]` | Symmetric secret key used to sign and verify JWT session tokens. |
 | `JWT_EXPIRES_IN` | Optional | `7d` | Lifetime expiration string for signed JWT tokens. |
-| `NODE_ENV` | Optional | `development` / `test` / `production` | Execution environment flag; disables rate limiting and silences logs in `test`. |
+| `NODE_ENV` | Optional | `development` / `test` / `production` | Execution environment flag; disables rate limiting and silences logs in `test`. Rate limiting is ACTIVE when this var is unset (production-safe). |
+| `ALLOWED_ORIGINS` | Optional (⚠️ set in prod) | — | Comma-separated CORS origin whitelist (e.g. `https://codeladder.in`). Empty = allow all (dev only). |
+| `MAX_LOGIN_ATTEMPTS` | Optional | `10` | Failed login attempts before account lockout. |
+| `LOCK_DURATION_MINUTES` | Optional | `15` | Minutes an account stays locked after hitting MAX_LOGIN_ATTEMPTS. |
+| `ADMIN_SEED_USERNAME` | Optional | — | Username for the one-time admin seed script (`npm run seed:admin`). |
+| `ADMIN_SEED_EMAIL` | Optional | — | Email for the admin seed user. |
+| `ADMIN_SEED_PASSWORD` | Optional | — | Password for the admin seed user (min 8 chars). |
+| `CAMPUS_PROXY_URL` | Optional | `http://172.31.2.4:8080` | HTTP proxy URL used by `setup-proxy.js` for campus network environments. |
 
 ### 5.3 Background Jobs & Long-Running Tasks
 - **Catalog Database Synchronization**: Run synchronously once during `server.js` startup via `questionCatalog.syncFromDatabase()`.
@@ -410,15 +436,16 @@ server.js
 
 ## 6. Request & Data Flow Traces
 
-### Flow 1: User Authentication & Dual-Header Verification
-1. **Client Request**: `GET /api/me/questions/solved` sent with headers `Authorization: Bearer <jwt>` and `X-Username: deepanshu`.
+### Flow 1: User Authentication (JWT-Only)
+1. **Client Request**: `GET /api/me/questions/solved` sent with header `Authorization: Bearer <jwt>`. No `X-Username` required.
 2. **Global Limiter**: Intercepted by `generalLimiter` in `app.js` (passed if below 500 requests / 15 min).
 3. **Route Matching**: Routed to `meRoutes` in `routes/me.js`.
 4. **Auth Middleware**: `middleware/auth.js`:
-   - Extracts Bearer token.
-   - Verifies signature using `process.env.JWT_SECRET`.
-   - Asserts `payload.username.toLowerCase() === req.headers['x-username'].toLowerCase()`.
-   - Queries `User.findOne({ username })` to verify account existence and role.
+   - Extracts Bearer token from `Authorization` header.
+   - Verifies JWT signature using `process.env.JWT_SECRET`.
+   - Decodes `{ id, username, role, tokenVersion }` from payload.
+   - Queries `User.findById(id)` to verify account existence.
+   - Checks `payload.tokenVersion === user.tokenVersion` — returns 401 if mismatch (revoked token).
    - Injects `req.user = { id: user._id, username: user.username, role: user.role }`.
 5. **Controller Execution**: `controllers/progressController.js` `listSolved()`:
    - Queries `UserQuestionState.find({ userId: req.user.id, solved: true })`.
@@ -436,14 +463,16 @@ server.js
 5. **Response**: Emits `{ questions, pagination: { page, limit, total, totalPages } }` in < 2ms without touching MongoDB.
 
 ### Flow 3: Platform Solve State Synchronization
-1. **Client Request**: `POST /api/platform-accounts/sync-solved` with body `{ platform: "LEETCODE", solvedProblems: ["two-sum", "add-two-numbers"] }`.
+1. **Client Request**: `POST /api/platform-accounts/sync-solved` with body `{ leetcode: ["two-sum"], codeforces: ["1234A"], codechef: [...], atcoder: [...] }`.
 2. **Auth Verification**: Validated by `auth` middleware; attaches authenticated `req.user`.
 3. **Controller Execution**: `controllers/platformAccountController.js` `syncSolvedProblems()`:
-   - Validates supported platform string.
-   - Maps external titles/slugs to question IDs via `questionCatalog.byPlatformAndExternalId`.
-   - Constructs bulk write operations (`bulkWrite`) for `UserQuestionState` with `upsert: true`, setting `solved: true`, `firstSolvedAt`, and `solvedAt`.
-   - Updates `PlatformAccount.lastSyncedAt`.
-4. **Response**: Returns `{ success: true, count: syncedCount }`.
+   - Validates per-platform cap (≤ 2,000) and total cap (≤ 5,000). Returns 400 if exceeded.
+   - Codeforces: attempts live `codeforces.com/api/user.status` verification if handle linked.
+   - LeetCode: marks `LEETCODE_CHALLENGE` if verified account, else `UNVERIFIED`.
+   - CodeChef/AtCoder: always `UNVERIFIED`.
+   - Queries `Question.find({ platform, externalId: { $in: [...] } })` for each platform (MongoDB, not catalog).
+   - Bulk upserts `UserQuestionState` with `verified`, `verificationMethod`, `solved: true`, `solvedAt`.
+4. **Response**: Returns `{ success: true, matchedCount, verifiedCount, unverifiedCount, message }`.
 
 ---
 
@@ -509,3 +538,103 @@ node setup-proxy.js
 # Revert npm and git back to direct personal connection
 node revert-proxy.js
 ```
+
+---
+
+## 8. Changelog
+
+### Remediation Pass — 2026-09-16
+
+#### Critical Fixes
+- **1.1 Admin backdoor removed**: Deleted `User.updateMany` auto-promotion in `server.js`; removed username-based `effectiveRole` override from `middleware/auth.js` and `controllers/authController.js`. Admin seeding now only via `npm run seed:admin` (`scripts/seedAdmin.js`).
+- **1.2 X-Username requirement removed**: `auth()` and `optionalAuth()` rewritten. Only `Authorization: Bearer <jwt>` is required.
+- **1.3 JWT revocation (tokenVersion)**: Added `tokenVersion` to `models/User.js`. `signToken()` embeds it; `auth()` checks it. `POST /api/auth/logout-all` invalidates all prior tokens. `JWT_EXPIRES_IN` reduced to `1d`.
+- **1.4 Unverified solve tracking**: `UserQuestionState` gains `verified` and `verificationMethod` fields. `syncSolvedProblems` performs live CF API verification; response includes `verifiedCount`/`unverifiedCount`.
+
+#### High Priority Fixes
+- **2.1 Retired manual solve**: `solve()` and `unsolve()` now return HTTP 501.
+- **2.3 Health check**: Returns 200 with database state when connected; 503 when disconnected.
+- **2.5 Blog XSS sanitization**: `sanitizeInput()` applied to blog title, content (create/update), and comment content. 500-comment cap enforced.
+
+#### Medium Priority Fixes
+- **3.3 Sync payload caps**: Per-platform cap of 2,000; total cap of 5,000.
+- **3.4 Ladder ownership transfer**: `transferOwnership()` added to `ladderController.js`; route `POST /:ladderId/transfer-ownership` added.
+
+#### Low Priority Fixes
+- **4.x Proxy URL**: `setup-proxy.js` reads `CAMPUS_PROXY_URL` env var with hardcoded fallback.
+- **4.x Audit log**: `models/AuditLog.js` created; admin `deleteUser`/`deleteLadder` write audit entries.
+- **4.x Contest platform enum**: `models/Contest.js` platform field restricted to `['CODEFORCES', 'LEETCODE', 'CODECHEF', 'ATCODER']`.
+
+#### Bug Fixes (discovered during test remediation)
+- **Blog sanitizer not called**: `sanitizeInput()` was defined but never invoked in `createBlog`, `updateBlog`, or `addComment`.
+- **LC sync case mismatch**: Lowercase normalization of LC slugs prevented matching uppercase externalIds in DB. Fixed by including original-case IDs in the `$in` query.
+- **Test nesting**: Transfer-ownership and blog XSS tests were accidentally nested inside an existing test. Fixed by restructuring the test file.
+
+#### Test Suite (75/75 passing)
+- New tests: logout-all revocation, deepanshu auto-elevate regression, sync-solved verification, Bearer-only auth, transfer-ownership, blog XSS sanitization.
+
+- Extended browser extension (`leetcode_history_importer_v3`) to intercept CodeChef submissions (`/api/ide/submit`, `/api/ide/status/`) and scrape verified profile history (supporting both contest problem titles and practice problem streams).
+- Added `POST /api/platform-accounts/codechef/submission` for real-time live solve tracking.
+- Added `POST /api/platform-accounts/codechef/sync` for verified bulk history import with automatic title-to-code catalog resolution and auto-upserting missing questions.
+- Added `CODECHEF_EXTENSION` to `UserQuestionState.verificationMethod` enum.
+- Automated tests passing (77/77).
+
+### Security Hardening Pass — 2026-09-16
+
+#### S1 — CORS Hardening
+- `cors()` replaced with origin whitelist. Set `ALLOWED_ORIGINS` env var. Empty = allow all (dev only).
+
+#### S2 + S9 — Helmet (HTTP Security Headers)
+- `helmet()` added to `app.js`. Sets HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy. Removes `X-Powered-By`.
+
+#### S3 — Account Lockout
+- `loginAttempts` and `lockUntil` fields added to `models/User.js`.
+- Login returns HTTP 429 + `Retry-After` header after `MAX_LOGIN_ATTEMPTS` (default 10) failures for `LOCK_DURATION_MINUTES` (default 15 min).
+- Lockout state clears on successful login.
+
+#### S4 — Scoped Body Size Limits
+- Default JSON body limit reduced from `10mb` to `100kb` for all routes.
+- `/api/platform-accounts/sync-solved` retains `10mb` limit via route-specific parser.
+
+#### S5 — Sync-Solved Rate Limiter
+- `syncSolvedLimiter` added: 5 requests / 10 minutes / IP.
+- Applied to `/api/platform-accounts/sync-solved` before the platform-accounts router.
+
+#### S6 — Safe Error Logging
+- `middleware/errorHandler.js`: full stack trace only in non-production. In production, logs message + timestamp only.
+- Includes `req.requestId` in log prefix.
+
+#### S7 — JWT_SECRET Entropy Check
+- `server.js` startup now enforces `JWT_SECRET.length >= 32`. Prints a `crypto.randomBytes` generation command if too short.
+
+#### S8 — MongoDB Injection Guard
+- `middleware/mongoSanitize.js` (NEW, custom): strips keys starting with `$` or containing `.` from `req.body` and `req.params`.
+- Custom implementation required because `express-mongo-sanitize` is incompatible with Express 5 (`req.query` is read-only in Express 5).
+
+#### S10 — Stronger Password Validation
+- New password regex: `/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/`
+- Applies to new registrations only. Existing password hashes unaffected.
+- Timing-safe login: dummy bcrypt compare performed when username doesn't exist to prevent enumeration.
+
+#### S11 — HTTP Parameter Pollution Guard
+- `hpp()` middleware added. Deduplicates repeated query params (`?role=ADMIN&role=USER` → last value wins).
+
+#### S12 — Health Endpoint Infrastructure Redaction
+- In `NODE_ENV=production`: DB host, port, name are omitted from `/api/health` response.
+
+#### S13 — Request ID Middleware
+- `middleware/requestId.js` (NEW): attaches UUID to `req.requestId` and echoes in `X-Request-Id` response header.
+- Propagated through error logs for request-level traceability.
+
+#### S14 — Rate Limiter Production Safety
+- Removed `isDev` skip from `generalLimiter` and `adminLimiter`.
+- Rate limiting is now active in ALL environments except `NODE_ENV=test`.
+- Added `syncSolvedLimiter` and exported it.
+
+#### New Files
+- `middleware/requestId.js`
+- `middleware/mongoSanitize.js`
+
+#### New npm Packages
+- `helmet` — HTTP security headers
+- `hpp` — HTTP parameter pollution guard

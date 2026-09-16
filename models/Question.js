@@ -40,7 +40,6 @@ const questionSchema = new mongoose.Schema(
       index: true,
       default: undefined
     },
-    // Direct mapping to Contest
     contestId: {
       type: String,
       trim: true,
@@ -59,17 +58,11 @@ const questionSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
-// Compound unique index on platform + externalId
 questionSchema.index(
   { platform: 1, externalId: 1 },
   { unique: true }
 );
-
-// Compound index for rating queries
 questionSchema.index({ platform: 1, rating: 1 });
-
-// Pre-validation hook: normalize platform & set difficulty default
 questionSchema.pre('validate', function () {
   if (this.platform) {
     this.platform = this.platform.toUpperCase();

@@ -94,8 +94,6 @@ class QuestionCatalog {
       if (plat && extId) {
         this.byPlatformAndExternalId.set(`${plat}:${extId}`, q);
       }
-
-      // Clean and normalize tags
       if (Array.isArray(q.tags)) {
         const cleanTags = [];
         const seen = new Set();
@@ -112,8 +110,6 @@ class QuestionCatalog {
       } else {
         q.tags = [];
       }
-
-      // Aggregate tags
       if (!this.tagsByPlatform.has(plat)) {
         this.tagsByPlatform.set(plat, new Map());
       }
@@ -161,20 +157,14 @@ class QuestionCatalog {
 
   getPaginatedQuestions(filters = {}, pageParam = 1, limitParam = 20) {
     let list = this.questions;
-
-    // 1. Platform filter
     const platform = filters.platform ? String(filters.platform).trim().toUpperCase() : '';
     if (platform && platform !== 'ALL') {
       list = list.filter((q) => q.platform === platform);
     }
-
-    // 2. Difficulty filter
     const difficulty = filters.difficulty ? String(filters.difficulty).trim().toUpperCase() : '';
     if (difficulty && difficulty !== 'ALL') {
       list = list.filter((q) => q.difficulty === difficulty);
     }
-
-    // 3. Tag filter
     const rawTag = filters.tag ? String(filters.tag).trim().toLowerCase() : '';
     const tag = tagAliases[rawTag] || rawTag;
     if (tag && tag !== 'all') {
@@ -185,8 +175,6 @@ class QuestionCatalog {
         })
       );
     }
-
-    // 4. Rating range
     const minRating = filters.minRating !== undefined && filters.minRating !== '' ? Number(filters.minRating) : null;
     const maxRating = filters.maxRating !== undefined && filters.maxRating !== '' ? Number(filters.maxRating) : null;
 
@@ -203,8 +191,6 @@ class QuestionCatalog {
         return r !== undefined && r !== null && Number(r) <= maxRating;
       });
     }
-
-    // 5. Search keyword filter (sanitized string matching)
     if (filters.search && typeof filters.search === 'string') {
       const rawSearch = filters.search.trim().slice(0, 100);
       if (rawSearch.length > 0) {
@@ -217,8 +203,6 @@ class QuestionCatalog {
         });
       }
     }
-
-    // 6. Pagination (strict upper bound of 50 to prevent mass scraping / DDoS)
     const total = list.length;
     const page = Math.max(Number.parseInt(pageParam || '1', 10), 1);
     const limit = Math.min(Math.max(Number.parseInt(limitParam || '20', 10), 1), 50);
@@ -244,8 +228,6 @@ class QuestionCatalog {
     if (plat && plat !== 'ALL' && this.tagsByPlatform.has(plat)) {
       tagMap = this.tagsByPlatform.get(plat);
     }
-
-    // Return tags sorted by occurrence frequency descending
     const sorted = Array.from(tagMap.entries())
       .sort((a, b) => b[1] - a[1])
       .map(([name, count]) => ({ name, count }));

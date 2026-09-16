@@ -1,4 +1,3 @@
-
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 
@@ -8,12 +7,22 @@ const app = require('./app');
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI;
 
+async function connectWithRetry(uri, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      await mongoose.connect(uri);
+      return;
+    } catch (err) {
+      if (attempt === maxRetries) throw err;
+      const delay = 1000 * Math.pow(2, attempt - 1);
+      console.warn(`[DB] Connect attempt ${attempt} failed. Retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
 async function startServer() {
   try {
-    // -----------------------------------------------
-    // Validate required environment variables
-    // -----------------------------------------------
-
     if (!MONGODB_URI) {
       throw new Error('MONGODB_URI is not configured');
     }
@@ -22,62 +31,53 @@ async function startServer() {
       throw new Error('JWT_SECRET is not configured');
     }
 
-    // -----------------------------------------------
-    // Connect to MongoDB
-    // -----------------------------------------------
+    if (process.env.JWT_SECRET.length < 32) {
+      throw new Error('JWT_SECRET must be at least 32 characters for security');
+    }
 
-    await mongoose.connect(MONGODB_URI);
+    await connectWithRetry(MONGODB_URI);
 
-    const conn = mongoose.connection;
-    console.log(`[DB] Connected successfully to database: "${conn.name}" on ${conn.host}:${conn.port}`);
+    const connection = mongoose.connection;
+    console.log(`[DB] Connected to "${connection.name}" on ${connection.host}:${connection.port}`);
 
-    conn.on('disconnected', () => {
-      console.warn('[DB] MongoDB disconnected!');
-    });
-    conn.on('reconnected', () => {
-      console.log(`[DB] MongoDB reconnected to: "${conn.name}" on ${conn.host}:${conn.port}`);
-    });
+    connection.on('disconnected', () => console.warn('[DB] MongoDB disconnected!'));
+    connection.on('reconnected', () => console.log(`[DB] MongoDB reconnected to "${connection.name}" on ${connection.host}:${connection.port}`));
 
     try {
       const questionCatalog = require('./services/questionCatalog');
       await questionCatalog.syncFromDatabase();
-    } catch (catErr) {
-      console.warn('Question catalog DB sync notice:', catErr.message);
+    } catch (catalogError) {
+      console.warn('[Catalog] DB sync notice:', catalogError.message);
     }
-
-    // -----------------------------------------------
-    // Start Express server
-    // -----------------------------------------------
 
     const server = app.listen(PORT, () => {
       console.log(`CodeLadder API running on port ${PORT}`);
-      console.log(`http://localhost:${PORT}`);
     });
 
-    // -----------------------------------------------
-    // Graceful shutdown
-    // -----------------------------------------------
-
-    const shutdown = async (signal) => {
+    const shutdown = (signal) => {
       console.log(`${signal} received. Shutting down...`);
-
       server.close(async () => {
         try {
           await mongoose.connection.close();
-          console.log('MongoDB connection closed');
+          console.log('[DB] Connection closed.');
           process.exit(0);
         } catch (error) {
-          console.error('Error while closing MongoDB:', error);
+          console.error('[DB] Error closing connection:', error);
           process.exit(1);
         }
       });
+
+      const SHUTDOWN_TIMEOUT_MS = 10000;
+      setTimeout(() => {
+        console.error('[Shutdown] Force exit after timeout.');
+        process.exit(1);
+      }, SHUTDOWN_TIMEOUT_MS).unref();
     };
 
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
-
   } catch (error) {
-    console.error('Failed to start CodeLadder server:', error);
+    console.error('Failed to start CodeLadder server:', error.message);
     process.exit(1);
   }
 }

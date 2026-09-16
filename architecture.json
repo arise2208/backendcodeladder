@@ -22,8 +22,9 @@
       ],
       "files": [
         "routes/auth.js",
-        "controllers/authController.js",
         "middleware/auth.js",
+        "scripts/seedAdmin.js",
+        "controllers/authController.js",
         "models/User.js"
       ],
       "keyFunctions": [
@@ -56,6 +57,18 @@
         "Dual-header matching: Token payload username must match X-Username header.",
         "Automatic admin promotion for usernames deepanshu and admin.",
         "Test suite in tests/api.test.js expects user without id property."
+      ],
+      "routes": [
+        "POST /api/auth/logout-all"
+      ],
+      "knownIssues": [
+        "Token revocation via tokenVersion field on User model. POST /api/auth/logout-all increments it.",
+        "JWT_EXPIRES_IN defaults to 1d (reduced from 7d).",
+        "Admin seeding: use npm run seed:admin with ADMIN_SEED_USERNAME/EMAIL/PASSWORD env vars.",
+        "Account lockout: HTTP 429 after MAX_LOGIN_ATTEMPTS failures for LOCK_DURATION_MINUTES.",
+        "Password strength enforced on registration: >=8 chars, uppercase, lowercase, digit.",
+        "Timing-safe login: dummy bcrypt compare when username not found.",
+        "JWT_SECRET must be >= 32 chars (startup-enforced)."
       ]
     },
     {
@@ -163,6 +176,12 @@
       "knownEdgeCases": [
         "solve() and unsolve() currently throw HTTP 403 because manual solving was locked in favor of account sync.",
         "2-minute freeze rule logic limits manual unsolve requests to within 120s of initial solve."
+      ],
+      "knownIssues": [
+        "solve() and unsolve() now return HTTP 501 Not Implemented. Use sync-solved instead.",
+        "UserQuestionState.verified: Boolean (default: false)",
+        "UserQuestionState.verificationMethod: enum [LEETCODE_CHALLENGE, CODEFORCES_API, SCRAPE, MANUAL_UNVERIFIED, UNVERIFIED]",
+        "Compound index { userId: 1, verified: 1 } added."
       ]
     },
     {
@@ -388,6 +407,11 @@
         "Quota: maximum 5 blogs per user.",
         "Content size limit: 50,000 characters per blog; 5,000 per comment.",
         "Voting toggles off on secondary click and enforces 2-minute freeze rule."
+      ],
+      "knownIssues": [
+        "sanitizeInput() strips <script>, on*= attributes, javascript: URIs from blog title/content/comment on create+update.",
+        "MAX_COMMENTS_PER_BLOG = 500 enforced in addComment().",
+        "createBlog response now includes content field."
       ]
     },
     {
@@ -443,6 +467,19 @@
       "knownEdgeCases": [
         "syncSolvedProblems accepts bulk arrays up to 10MB JSON payloads.",
         "LeetCode challenge generates a random verification code that must be submitted to LeetCode."
+      ],
+      "knownIssues": [
+        "syncSolvedProblems: per-platform cap 2000, total cap 5000. HTTP 400 if exceeded.",
+        "Codeforces: live CF API verification if handle linked (CODEFORCES_API vs UNVERIFIED).",
+        "LeetCode: LEETCODE_CHALLENGE if verified account, else UNVERIFIED.",
+        "CodeChef/AtCoder: always UNVERIFIED.",
+        "Response includes verifiedCount and unverifiedCount.",
+        "LC slug matching uses both lowercase and original-case externalIds.",
+        "LeetCode challenge verification requires code containing auth token."
+      ],
+      "routes": [
+        "POST /api/platform-accounts/codechef/submission",
+        "POST /api/platform-accounts/codechef/sync"
       ]
     },
     {
@@ -575,6 +612,9 @@
       },
       "knownEdgeCases": [
         "Deleting a user cascades deletions across their personal ladders, memberships, practice records, and question states."
+      ],
+      "knownIssues": [
+        "Audit log written to auditlogs collection before deleteUser() and deleteLadder()."
       ]
     },
     {
@@ -602,6 +642,10 @@
       },
       "knownEdgeCases": [
         "Strict equality assertion in tests/api.test.js expects { ok: true, service: 'codeladder-api' } without database payload."
+      ],
+      "knownIssues": [
+        "Returns HTTP 200 with { ok, service, database: { connected, host, name, readyState } } when connected.",
+        "Returns HTTP 503 with { ok: false, database: { connected: false } } when disconnected."
       ]
     }
   ],
@@ -722,5 +766,83 @@
     "syncLeetCode": "node scripts/syncLeetCodeContests.js",
     "setupProxy": "node setup-proxy.js",
     "revertProxy": "node revert-proxy.js"
+  },
+  "changelog": [
+    {
+      "date": "2026-09-16",
+      "title": "Architecture Remediation Pass",
+      "changes": [
+        "1.1: Removed admin backdoor; seedAdmin.js added",
+        "1.2: X-Username header no longer required",
+        "1.3: JWT revocation via tokenVersion; logout-all route; JWT TTL 1d",
+        "1.4: verified/verificationMethod fields on UserQuestionState; sync-solved verification logic",
+        "2.1: solve/unsolve return 501",
+        "2.3: Health returns 200/503 with database state",
+        "2.5: Blog/comment XSS sanitization; 500-comment cap",
+        "3.3: sync-solved payload caps (2000/platform, 5000 total)",
+        "3.4: Ladder ownership transfer route added",
+        "4.x: CAMPUS_PROXY_URL env var; AuditLog model; Contest platform enum",
+        "Bugfix: sanitizeInput() was defined but not called",
+        "Bugfix: LC sync now searches original-case externalIds",
+        "Tests: 75/75 passing"
+      ]
+    },
+    {
+      "date": "2026-09-16",
+      "title": "Security Hardening Pass",
+      "changes": [
+        "S1: CORS whitelist via ALLOWED_ORIGINS env var",
+        "S2+S9: helmet() — HTTP security headers, X-Powered-By removed",
+        "S3: Account lockout (loginAttempts, lockUntil on User model)",
+        "S4: Body limit 100kb default; 10mb only for sync-solved",
+        "S5: syncSolvedLimiter (5 req / 10 min)",
+        "S6: Safe error logging — no stack in production",
+        "S7: JWT_SECRET >= 32 chars enforced at startup",
+        "S8: Custom mongoSanitize middleware (Express 5 compatible)",
+        "S10: Password strength regex + timing-safe dummy bcrypt",
+        "S11: hpp() HTTP Parameter Pollution guard",
+        "S12: Health endpoint redacts DB host/port/name in production",
+        "S13: requestId middleware — X-Request-Id UUID header",
+        "S14: Rate limiters active in all envs except test",
+        "New files: middleware/requestId.js, middleware/mongoSanitize.js",
+        "New packages: helmet, hpp",
+        "Tests: 75/75 passing"
+      ]
+    },
+    {
+      "date": "2026-09-16",
+      "title": "CodeChef Extension Integration",
+      "changes": [
+        "Added POST /api/platform-accounts/codechef/submission",
+        "Added POST /api/platform-accounts/codechef/sync",
+        "Added CODECHEF_EXTENSION to UserQuestionState.verificationMethod enum",
+        "Updated browser extension with CodeChef permissions, inpage interceptor, content script listener, and popup sync UI",
+        "Added title-to-code resolution and auto-upsert in syncCodeChefHistory",
+        "All 77 tests passing"
+      ]
+    }
+  ],
+  "security": {
+    "headers": "helmet() — sets HSTS, CSP, X-Frame-Options, X-Content-Type-Options, removes X-Powered-By",
+    "cors": "Whitelist-based via ALLOWED_ORIGINS env var. Empty = allow all (dev). Production requires explicit origins.",
+    "bodyLimits": "100kb default; /api/platform-accounts/sync-solved allows 10mb",
+    "mongoInjection": "middleware/mongoSanitize.js strips $ and . prefixed keys from body and params",
+    "hpp": "hpp() deduplicates repeated query parameters",
+    "rateLimit": {
+      "general": "500 req / 15 min / IP",
+      "login": "10 req / 15 min / IP",
+      "register": "5 req / hr / IP",
+      "admin": "1000 req / 15 min / IP",
+      "catalog": "120 req / min / IP",
+      "syncSolved": "5 req / 10 min / IP"
+    },
+    "accountLockout": {
+      "maxAttempts": "MAX_LOGIN_ATTEMPTS env (default 10)",
+      "lockDuration": "LOCK_DURATION_MINUTES env (default 15)",
+      "response": "HTTP 429 with Retry-After header",
+      "reset": "Cleared on successful login"
+    },
+    "requestId": "middleware/requestId.js — UUID per request, X-Request-Id header",
+    "errorLogging": "Stack traces omitted in NODE_ENV=production"
   }
 }

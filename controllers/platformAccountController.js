@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const PlatformAccount = require('../models/PlatformAccount');
 const Question = require('../models/Question');
 const UserQuestionState = require('../models/UserQuestionState');
@@ -180,9 +182,6 @@ function generateVerificationCode() {
   return `CL-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 }
 
-/**
- * Helper: Query LeetCode Public GraphQL recent AC submissions
- */
 async function fetchLeetCodeRecentAcSubmissions(username) {
   const query = `
     query recentAcSubmissions($username: String!, $limit: Int!) {
@@ -227,9 +226,6 @@ async function fetchLeetCodeRecentAcSubmissions(username) {
   }
 }
 
-/**
- * Helper: Query LeetCode User Profile (Summary / About Me)
- */
 async function fetchLeetCodeProfile(username) {
   const query = `
     query userProfile($username: String!) {
@@ -277,18 +273,320 @@ async function fetchLeetCodeProfile(username) {
   }
 }
 
-/**
- * Start LeetCode Ownership Verification Challenge
- * Issues a 60-second challenge with a random Hard problem + solution,
- * as well as a Profile Summary verification code.
- */
+async function runLeetCodeGraphQLServer(query, variables = {}) {
+  const payload = JSON.stringify({ query, variables });
+  try {
+    const { stdout } = await execFileAsync('curl', [
+      '-s',
+      '--max-time', '10',
+      'https://leetcode.com/graphql',
+      '-H', 'Content-Type: application/json',
+      '-H', 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      '-H', 'Referer: https://leetcode.com/',
+      '-d', payload
+    ]);
+    const json = JSON.parse(stdout);
+    if (json && !json.errors) {
+      return json.data;
+    }
+  } catch (_) {
+    try {
+      const res = await fetch('https://leetcode.com/graphql', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        },
+        body: payload,
+        signal: AbortSignal.timeout(8000)
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json && !json.errors) return json.data;
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
+async function fetchLeetCodeUserData(req, res) {
+  const rawHandle = req.body?.handle || req.query?.handle || req.params?.handle || '';
+  const cleanHandle = String(rawHandle).trim().replace(/^@/, '');
+  if (!cleanHandle) {
+    throw httpError(400, 'LeetCode handle is required');
+  }
+
+  const contestQuery = `
+    query userContestInfo($username: String!) {
+      userContestRanking(username: $username) {
+        attendedContestsCount
+        rating
+        globalRanking
+        totalParticipants
+        topPercentage
+        badge {
+          name
+        }
+      }
+      userContestRankingHistory(username: $username) {
+        attended
+        rating
+        ranking
+        problemsSolved
+        contest {
+          title
+          startTime
+        }
+      }
+    }
+  `;
+
+  const recentAcQuery = `
+    query recentAcSubmissions($username: String!, $limit: Int!) {
+      recentAcSubmissionList(username: $username, limit: $limit) {
+        id
+        title
+        titleSlug
+        timestamp
+      }
+    }
+  `;
+
+  const calendarAndStatsQuery = `
+    query userProfileCalendarAndStats($username: String!) {
+      allQuestionsCount {
+        difficulty
+        count
+      }
+      matchedUser(username: $username) {
+        submitStatsGlobal {
+          acSubmissionNum {
+            difficulty
+            count
+          }
+        }
+        userCalendar {
+          streak
+          totalActiveDays
+          submissionCalendar
+        }
+      }
+    }
+  `;
+
+  let userRating = 1500;
+  let globalRanking = null;
+  let attendedContests = 0;
+  let topPercentage = null;
+  let badgeName = null;
+  let contestHistory = [];
+  let rawRecentAc = [];
+  let totalSolved = 0;
+  let easySolved = 0;
+  let mediumSolved = 0;
+  let hardSolved = 0;
+  let totalQuestions = 4047;
+  let streak = 0;
+  let totalActiveDays = 0;
+  let submissionCalendar = {};
+  const solvedSlugs = new Set();
+
+  const [contestData, acData, statsData] = await Promise.all([
+    runLeetCodeGraphQLServer(contestQuery, { username: cleanHandle }).catch(() => null),
+    runLeetCodeGraphQLServer(recentAcQuery, { username: cleanHandle, limit: 50 }).catch(() => null),
+    runLeetCodeGraphQLServer(calendarAndStatsQuery, { username: cleanHandle }).catch(() => null)
+  ]);
+
+  if (contestData?.userContestRanking) {
+    const r = contestData.userContestRanking;
+    userRating = Math.round(r.rating || 1500);
+    globalRanking = r.globalRanking || null;
+    attendedContests = r.attendedContestsCount || 0;
+    topPercentage = r.topPercentage || null;
+    badgeName = r.badge?.name || null;
+  }
+  if (Array.isArray(contestData?.userContestRankingHistory)) {
+    contestHistory = contestData.userContestRankingHistory;
+  }
+
+  if (Array.isArray(acData?.recentAcSubmissionList)) {
+    rawRecentAc = acData.recentAcSubmissionList;
+    rawRecentAc.forEach((s) => {
+      if (s.titleSlug) solvedSlugs.add(s.titleSlug.toLowerCase());
+    });
+  }
+
+  if (statsData?.matchedUser) {
+    const mu = statsData.matchedUser;
+    if (mu.submitStatsGlobal?.acSubmissionNum) {
+      mu.submitStatsGlobal.acSubmissionNum.forEach((item) => {
+        if (item.difficulty === 'All') totalSolved = item.count;
+        else if (item.difficulty === 'Easy') easySolved = item.count;
+        else if (item.difficulty === 'Medium') mediumSolved = item.count;
+        else if (item.difficulty === 'Hard') hardSolved = item.count;
+      });
+    }
+    if (mu.userCalendar) {
+      streak = mu.userCalendar.streak || 0;
+      totalActiveDays = mu.userCalendar.totalActiveDays || 0;
+      try {
+        submissionCalendar = typeof mu.userCalendar.submissionCalendar === 'string'
+          ? JSON.parse(mu.userCalendar.submissionCalendar)
+          : (mu.userCalendar.submissionCalendar || {});
+      } catch (_) {
+        submissionCalendar = {};
+      }
+    }
+  }
+
+  if (statsData?.allQuestionsCount && Array.isArray(statsData.allQuestionsCount)) {
+    const all = statsData.allQuestionsCount.find((i) => i.difficulty === 'All');
+    if (all?.count) totalQuestions = all.count;
+  }
+
+  // Server-side fallback to Alfa API if LeetCode GraphQL was blocked/empty
+  if (contestHistory.length === 0 && rawRecentAc.length === 0) {
+    try {
+      const alfaRes = await fetch(`https://alfa-leetcode-api.onrender.com/userContestRankingInfo/${encodeURIComponent(cleanHandle)}`, {
+        signal: AbortSignal.timeout(6000)
+      });
+      if (alfaRes.ok) {
+        const alfaJson = await alfaRes.json();
+        if (alfaJson.userContestRanking) {
+          userRating = Math.round(alfaJson.userContestRanking.rating || userRating);
+          globalRanking = alfaJson.userContestRanking.globalRanking || globalRanking;
+          attendedContests = alfaJson.userContestRanking.attendedContestsCount || attendedContests;
+          badgeName = alfaJson.userContestRanking.badge?.name || badgeName;
+          topPercentage = alfaJson.userContestRanking.topPercentage || topPercentage;
+        }
+        if (Array.isArray(alfaJson.userContestRankingHistory)) {
+          contestHistory = alfaJson.userContestRankingHistory;
+        }
+      }
+    } catch (_) {}
+
+    try {
+      const alfaAcRes = await fetch(`https://alfa-leetcode-api.onrender.com/${encodeURIComponent(cleanHandle)}/acSubmission`, {
+        signal: AbortSignal.timeout(6000)
+      });
+      if (alfaAcRes.ok) {
+        const alfaAcJson = await alfaAcRes.json();
+        if (Array.isArray(alfaAcJson.submission)) {
+          rawRecentAc = alfaAcJson.submission;
+          rawRecentAc.forEach((s) => {
+            if (s.titleSlug) solvedSlugs.add(s.titleSlug.toLowerCase());
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Fallback for stats & calendar
+  if (totalSolved === 0 || Object.keys(submissionCalendar).length === 0) {
+    try {
+      const statsRes = await fetch(`https://leetcode-stats-api.herokuapp.com/${encodeURIComponent(cleanHandle)}`, {
+        signal: AbortSignal.timeout(6000)
+      });
+      if (statsRes.ok) {
+        const s = await statsRes.json();
+        if (s.totalSolved && totalSolved === 0) {
+          totalSolved = s.totalSolved;
+          easySolved = s.easySolved || 0;
+          mediumSolved = s.mediumSolved || 0;
+          hardSolved = s.hardSolved || 0;
+        }
+        if (s.ranking && !globalRanking) globalRanking = s.ranking;
+      }
+    } catch (_) {}
+  }
+
+  // Check verification state of this handle for the authenticated user
+  const lcAccount = await PlatformAccount.findOne({
+    userId: req.user.id,
+    platform: 'LEETCODE'
+  }).lean();
+  const isVerified = Boolean(
+    lcAccount &&
+    lcAccount.verified &&
+    lcAccount.handle?.toLowerCase() === cleanHandle.toLowerCase()
+  );
+
+  // Auto-upsert and record any recent AC submissions to MongoDB Question and UserQuestionState ONLY IF VERIFIED
+  let autoSyncedCount = 0;
+  if (isVerified && rawRecentAc.length > 0) {
+    for (const sub of rawRecentAc) {
+      if (!sub.titleSlug) continue;
+      const slug = sub.titleSlug.toLowerCase();
+      try {
+        const question = await Question.findOneAndUpdate(
+          { platform: 'LEETCODE', externalId: slug },
+          {
+            $setOnInsert: {
+              platform: 'LEETCODE',
+              externalId: slug,
+              title: sub.title || slug,
+              url: `https://leetcode.com/problems/${slug}/`,
+              difficulty: 'MEDIUM',
+              tags: [],
+              metadata: { frontendQuestionId: sub.id || null }
+            }
+          },
+          { upsert: true, returnDocument: 'after' }
+        );
+
+        const solvedAt = sub.timestamp ? new Date(Number(sub.timestamp) * 1000) : new Date();
+        await UserQuestionState.findOneAndUpdate(
+          { userId: req.user.id, questionId: question._id },
+          {
+            $set: {
+              solved: true,
+              solvedAt,
+              verified: isVerified,
+              verificationMethod: isVerified ? 'LEETCODE_CHALLENGE' : 'UNVERIFIED'
+            },
+            $setOnInsert: {
+              firstSolvedAt: solvedAt,
+              starred: false
+            }
+          },
+          { upsert: true }
+        );
+        autoSyncedCount++;
+      } catch (_) {}
+    }
+  }
+
+  res.json({
+    success: true,
+    userSolved: {
+      handle: cleanHandle,
+      userRating,
+      globalRanking,
+      attendedContests,
+      topPercentage,
+      badgeName,
+      totalSolved: totalSolved || solvedSlugs.size,
+      easySolved,
+      mediumSolved,
+      hardSolved,
+      totalQuestions,
+      streak,
+      totalActiveDays,
+      submissionCalendar,
+      contestHistory,
+      recentAcSubmissions: rawRecentAc,
+      solvedSlugs: Array.from(solvedSlugs),
+      autoSyncedCount,
+      isVerified
+    }
+  });
+}
+
 async function startLeetCodeChallenge(req, res) {
   const handle = (req.body.handle || '').trim();
   if (!handle) {
     throw httpError(400, 'LeetCode handle is required');
   }
-
-  // Check if another user has already verified this handle
   const existingVerified = await PlatformAccount.findOne({
     platform: 'LEETCODE',
     handle: { $regex: new RegExp(`^${handle}$`, 'i') },
@@ -299,8 +597,6 @@ async function startLeetCodeChallenge(req, res) {
   if (existingVerified) {
     throw httpError(409, `The LeetCode handle @${handle} is already verified by another CodeLadder user.`);
   }
-
-  // Select a random Hard problem from pool
   const randomIndex = Math.floor(Math.random() * HARD_CHALLENGE_POOL.length);
   const selectedProblem = HARD_CHALLENGE_POOL[randomIndex];
   const verificationCode = generateVerificationCode();
@@ -354,11 +650,6 @@ async function startLeetCodeChallenge(req, res) {
   });
 }
 
-/**
- * Check & Verify LeetCode Ownership Challenge
- * Checks recentAcSubmissionList on LeetCode for a matching Accepted submission,
- * or verifies that aboutMe contains verificationCode.
- */
 async function verifyLeetCodeChallenge(req, res) {
   const handle = (req.body.handle || '').trim();
 
@@ -381,8 +672,6 @@ async function verifyLeetCodeChallenge(req, res) {
   }
 
   const targetHandle = handle || account.handle;
-
-  // 1. Check Profile Bio / Summary code first (zero stat impact)
   if (challenge.verificationCode) {
     try {
       const profile = await fetchLeetCodeProfile(targetHandle);
@@ -409,8 +698,6 @@ async function verifyLeetCodeChallenge(req, res) {
       }
     } catch (_) {}
   }
-
-  // 2. Check Recent Accepted Submissions on LeetCode
   let recentAcSubs = [];
   try {
     recentAcSubs = await fetchLeetCodeRecentAcSubmissions(targetHandle);
@@ -460,26 +747,18 @@ async function verifyLeetCodeChallenge(req, res) {
   });
 }
 
-/**
- * Record Live Single Submission from Extension
- * Validates claimedUserId and verified handle before persisting.
- */
 async function recordSingleSubmission(req, res) {
   const { handle, claimedUserId, submission } = req.body;
 
   if (!submission || !submission.slug) {
     throw httpError(400, 'submission object with slug is required');
   }
-
-  // 1. Claimed User ID Validation (anti-spoofing warning)
   if (claimedUserId && String(claimedUserId) !== String(req.user.id)) {
     throw httpError(
       403,
       `User ID mismatch: Extension sent data for User ID "${claimedUserId}", but active authenticated session is User ID "${req.user.id}". Please re-authenticate your extension.`
     );
   }
-
-  // 2. Handle & Verification Guard
   const targetHandle = (handle || '').trim();
   const account = await PlatformAccount.findOne({
     userId: req.user.id,
@@ -499,8 +778,6 @@ async function recordSingleSubmission(req, res) {
       `Handle mismatch: Your verified CodeLadder LeetCode handle is @${account.handle}, but the extension attempted to submit data for @${targetHandle}. Sending data for an unverified account is not permitted.`
     );
   }
-
-  // 3. Upsert Question in catalog
   const diffUpper = (submission.difficulty || 'MEDIUM').toUpperCase();
   const difficulty = ['EASY', 'MEDIUM', 'HARD'].includes(diffUpper) ? diffUpper : 'MEDIUM';
 
@@ -521,8 +798,6 @@ async function recordSingleSubmission(req, res) {
     },
     { upsert: true, returnDocument: 'after' }
   );
-
-  // 4. Update UserQuestionState
   const solvedAt = submission.solvedAt ? new Date(submission.solvedAt) : new Date();
 
   await UserQuestionState.findOneAndUpdate(
@@ -552,27 +827,18 @@ async function recordSingleSubmission(req, res) {
   });
 }
 
-/**
- * Verified LeetCode Submission History Sync
- * Receives normalized LeetCode problems from the authenticated extension.
- * Atomically updates Questions, UserQuestionState, and PlatformAccount.
- */
 async function syncLeetCodeHistory(req, res) {
   const { handle, claimedUserId, problems } = req.body;
 
   if (!Array.isArray(problems) || problems.length === 0) {
     throw httpError(400, 'problems array is required and must not be empty');
   }
-
-  // Anti-spoofing check
   if (claimedUserId && String(claimedUserId) !== String(req.user.id)) {
     throw httpError(
       403,
       `User ID mismatch: Extension claimed User ID "${claimedUserId}", but session is User ID "${req.user.id}".`
     );
   }
-
-  // Check if handle is claimed/verified by another user
   const targetHandle = (handle || req.user.username || 'leetcode_user').trim();
   const existingVerifiedOther = await PlatformAccount.findOne({
     platform: 'LEETCODE',
@@ -584,8 +850,6 @@ async function syncLeetCodeHistory(req, res) {
   if (existingVerifiedOther) {
     throw httpError(409, `The LeetCode handle @${targetHandle} is already verified by another CodeLadder user.`);
   }
-
-  // 1. Enforce Verification Guard
   const account = await PlatformAccount.findOne({
     userId: req.user.id,
     platform: 'LEETCODE'
@@ -607,8 +871,6 @@ async function syncLeetCodeHistory(req, res) {
 
   account.lastSyncedAt = new Date();
   await account.save();
-
-  // 2. Prepare bulk upserts for the canonical Question catalog
   const questionBulkOps = [];
   for (const p of problems) {
     if (!p.slug) continue;
@@ -639,8 +901,6 @@ async function syncLeetCodeHistory(req, res) {
   if (questionBulkOps.length > 0) {
     await Question.bulkWrite(questionBulkOps, { ordered: false });
   }
-
-  // 3. Find MongoDB _id references for all synced problems
   const slugs = problems.map((p) => p.slug).filter(Boolean);
   const matchedQuestions = await Question.find({
     platform: 'LEETCODE',
@@ -648,8 +908,6 @@ async function syncLeetCodeHistory(req, res) {
   }).select('_id externalId').lean();
 
   const qMap = new Map(matchedQuestions.map((q) => [q.externalId, q._id]));
-
-  // 4. Prepare UserQuestionState bulk operations
   const stateBulkOps = [];
   for (const p of problems) {
     const qId = qMap.get(p.slug);
@@ -688,10 +946,6 @@ async function syncLeetCodeHistory(req, res) {
   });
 }
 
-/**
- * Bulk Sync Solved Problems across platforms
- * Updates UserQuestionState for verified solved problems from Codeforces, LeetCode, CodeChef, and AtCoder
- */
 async function syncSolvedProblems(req, res) {
   const { codeforces = [], leetcode = [], codechef = [], atcoder = [] } = req.body;
   const userId = req.user.id;
@@ -708,8 +962,6 @@ async function syncSolvedProblems(req, res) {
   ) {
     throw httpError(400, `Payload exceeds allowed cap of ${MAX_PER_PLATFORM} problems per platform or ${MAX_TOTAL} total.`);
   }
-
-  // Check user linked platform accounts
   const userAccounts = await PlatformAccount.find({ userId }).lean();
   const cfAccount = userAccounts.find(a => a.platform === "CODEFORCES");
   const lcAccount = userAccounts.find(a => a.platform === "LEETCODE");
@@ -741,8 +993,6 @@ async function syncSolvedProblems(req, res) {
   }
 
   const opsMap = new Map(); // questionId -> { verified, method }
-
-  // 1. Codeforces
   if (Array.isArray(codeforces) && codeforces.length > 0) {
     const cfPatterns = [];
     for (const item of codeforces) {
@@ -765,20 +1015,22 @@ async function syncSolvedProblems(req, res) {
       }
     }
   }
-
-  // 2. LeetCode
   if (Array.isArray(leetcode) && leetcode.length > 0) {
     const lcSlugs = leetcode.map(s => String(s).toLowerCase().trim()).filter(Boolean);
+    // Also keep original-case IDs so uppercase externalIds stored in DB are matched.
+    const lcOriginal = leetcode.map(s => String(s).trim()).filter(Boolean);
     if (lcSlugs.length > 0) {
       const lcUrls = lcSlugs.flatMap(s => [
         `https://leetcode.com/problems/${s}/`,
         `https://leetcode.com/problems/${s}`
       ]);
+      // Combine lowercase slugs with original-case IDs for the $in lists
+      const lcExternalIds = [...new Set([...lcSlugs, ...lcOriginal])];
       const lcQuestions = await Question.find({
         platform: "LEETCODE",
         $or: [
-          { slug: { $in: lcSlugs } },
-          { externalId: { $in: lcSlugs } },
+          { slug: { $in: lcExternalIds } },
+          { externalId: { $in: lcExternalIds } },
           { url: { $in: lcUrls } }
         ]
       }).select("_id externalId").lean().catch(() => []);
@@ -792,8 +1044,6 @@ async function syncSolvedProblems(req, res) {
       }
     }
   }
-
-  // 3. CodeChef & AtCoder (marked UNVERIFIED)
   if (Array.isArray(codechef) && codechef.length > 0) {
     const ccCodes = codechef.map(s => String(s).toUpperCase().trim()).filter(Boolean);
     if (ccCodes.length > 0) {
@@ -825,8 +1075,6 @@ async function syncSolvedProblems(req, res) {
       }
     }
   }
-
-  // 4. Bulk upsert UserQuestionState
   const now = new Date();
   let verifiedCount = 0;
   let unverifiedCount = 0;
@@ -870,6 +1118,515 @@ async function syncSolvedProblems(req, res) {
   });
 }
 
+
+async function recordCodeChefSubmission(req, res) {
+  const { handle, claimedUserId, submission } = req.body;
+
+  if (!submission || (!submission.problemCode && !submission.slug)) {
+    throw httpError(400, "submission object with problemCode is required");
+  }
+
+  const problemCode = String(submission.problemCode || submission.slug).trim().toUpperCase();
+
+  if (claimedUserId && String(claimedUserId) !== String(req.user.id)) {
+    throw httpError(
+      403,
+      `User ID mismatch: Extension sent data for User ID "${claimedUserId}", but active authenticated session is User ID "${req.user.id}". Please re-authenticate your extension.`
+    );
+  }
+
+  const targetHandle = (handle || "").trim();
+  const account = await PlatformAccount.findOne({
+    userId: req.user.id,
+    platform: "CODECHEF"
+  });
+
+  if (!account) {
+    throw httpError(403, "No CodeChef account linked. Please link your CodeChef handle in Settings first.");
+  }
+
+  if (targetHandle && account.handle.toLowerCase() !== targetHandle.toLowerCase()) {
+    throw httpError(
+      403,
+      `Handle mismatch: Your linked CodeChef handle is @${account.handle}, but the extension submitted data for @${targetHandle}.`
+    );
+  }
+
+  if (!account.verified) {
+    account.verified = true;
+    account.verifiedAt = new Date();
+  }
+  account.lastSyncedAt = new Date();
+  await account.save();
+
+  const diffUpper = (submission.difficulty || "MEDIUM").toUpperCase();
+  const difficulty = ["EASY", "MEDIUM", "HARD"].includes(diffUpper) ? diffUpper : "MEDIUM";
+
+  const question = await Question.findOneAndUpdate(
+    { platform: "CODECHEF", externalId: problemCode },
+    {
+      $setOnInsert: {
+        platform: "CODECHEF",
+        externalId: problemCode,
+        title: submission.title || problemCode,
+        url: `https://www.codechef.com/problems/${problemCode}`,
+        tags: Array.isArray(submission.tags) ? submission.tags : [],
+        difficulty
+      }
+    },
+    { upsert: true, returnDocument: "after" }
+  );
+
+  const solvedAt = submission.solvedAt ? new Date(submission.solvedAt) : new Date();
+
+  await UserQuestionState.findOneAndUpdate(
+    { userId: req.user.id, questionId: question._id },
+    {
+      $set: {
+        solved: true,
+        solvedAt,
+        verified: true,
+        verificationMethod: "CODECHEF_EXTENSION"
+      },
+      $setOnInsert: {
+        firstSolvedAt: solvedAt,
+        starred: false
+      }
+    },
+    { upsert: true }
+  );
+
+  res.json({
+    success: true,
+    acknowledged: true,
+    message: `Problem "${problemCode}" successfully verified and recorded via CodeChef extension.`,
+    problemCode,
+    questionId: question._id
+  });
+}
+
+let ccContestNameMap = null;
+let ccContestCodeMap = null;
+
+function getCodeChefContestCatalog() {
+  if (ccContestNameMap && ccContestCodeMap) {
+    return { nameMap: ccContestNameMap, codeMap: ccContestCodeMap };
+  }
+  const nameMap = new Map();
+  const codeMap = new Map();
+  try {
+    const filePath = path.join(__dirname, '../data/codechef-contest.json');
+    if (fs.existsSync(filePath)) {
+      const contestList = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      for (const c of contestList) {
+        for (const p of (c.problems || [])) {
+          if (p.code) {
+            const codeUpper = String(p.code).trim().toUpperCase();
+            codeMap.set(codeUpper, {
+              code: codeUpper,
+              name: p.name || codeUpper,
+              rating: p.rating && p.rating > 0 && p.rating !== 9999 ? Number(p.rating) : null,
+              tags: Array.isArray(p.tags) ? p.tags : [],
+              url: p.url || `https://www.codechef.com/problems/${codeUpper}`
+            });
+            if (p.name) {
+              nameMap.set(String(p.name).trim().toLowerCase(), codeUpper);
+            }
+            nameMap.set(codeUpper.toLowerCase(), codeUpper);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[CodeChef] Could not load codechef-contest.json:', err.message);
+  }
+  ccContestNameMap = nameMap;
+  ccContestCodeMap = codeMap;
+  return { nameMap, codeMap };
+}
+
+async function syncCodeChefHistory(req, res) {
+  const { handle, claimedUserId, problems } = req.body;
+
+  if (!Array.isArray(problems) || problems.length === 0) {
+    throw httpError(400, "problems array is required and must not be empty");
+  }
+
+  if (claimedUserId && String(claimedUserId) !== String(req.user.id)) {
+    throw httpError(
+      403,
+      `User ID mismatch: Extension claimed User ID "${claimedUserId}", but session is User ID "${req.user.id}".`
+    );
+  }
+
+  const targetHandle = (handle || "").trim();
+  let account = await PlatformAccount.findOne({
+    userId: req.user.id,
+    platform: "CODECHEF"
+  });
+
+  if (!account) {
+    if (targetHandle) {
+      account = await PlatformAccount.create({
+        userId: req.user.id,
+        platform: "CODECHEF",
+        handle: targetHandle,
+        verified: true,
+        verifiedAt: new Date(),
+        lastSyncedAt: new Date()
+      });
+    } else {
+      throw httpError(403, "No CodeChef account linked on CodeLadder. Please link your handle in Settings first.");
+    }
+  } else {
+    if (targetHandle && account.handle.toLowerCase() !== targetHandle.toLowerCase()) {
+      throw httpError(
+        403,
+        `Handle mismatch: Your linked CodeChef handle is @${account.handle}, but the extension attempted to sync history for @${targetHandle}.`
+      );
+    }
+    account.verified = true;
+    account.lastSyncedAt = new Date();
+    await account.save();
+  }
+
+  const { nameMap, codeMap } = getCodeChefContestCatalog();
+
+  const normalizedProblems = [];
+  const searchCodes = new Set();
+  const searchTitles = new Set();
+
+  for (const item of problems) {
+    let rawCode = "";
+    let rawName = "";
+    let solvedAt = null;
+
+    if (typeof item === "string") {
+      const trimmed = item.trim();
+      rawName = trimmed;
+      if (/^[A-Z0-9_]{2,20}$/i.test(trimmed)) {
+        rawCode = trimmed.toUpperCase();
+      }
+    } else if (item && typeof item === "object") {
+      rawCode = String(item.code || item.externalId || item.problemCode || item.slug || "").trim().toUpperCase();
+      rawName = String(item.name || item.title || "").trim();
+      if (item.solvedAt) {
+        const parsedDate = new Date(item.solvedAt);
+        if (!isNaN(parsedDate.getTime())) solvedAt = parsedDate;
+      }
+    }
+
+    let resolvedCode = rawCode;
+    let resolvedTitle = rawName;
+
+    if (!resolvedCode && rawName) {
+      const mapped = nameMap.get(rawName.toLowerCase());
+      if (mapped) resolvedCode = mapped;
+    }
+
+    if (!resolvedCode && rawName) {
+      const cleaned = rawName.replace(/[^A-Za-z0-9_]/g, "").toUpperCase();
+      if (cleaned.length >= 2 && cleaned.length <= 20) {
+        resolvedCode = cleaned;
+      }
+    }
+
+    if (!resolvedCode && !resolvedTitle) continue;
+
+    if (resolvedCode) searchCodes.add(resolvedCode);
+    if (resolvedTitle) searchTitles.add(resolvedTitle.toLowerCase());
+
+    normalizedProblems.push({
+      code: resolvedCode || null,
+      title: resolvedTitle || resolvedCode,
+      solvedAt
+    });
+  }
+
+  const queryConditions = [];
+  if (searchCodes.size > 0) {
+    queryConditions.push({ externalId: { $in: Array.from(searchCodes) } });
+  }
+  if (searchTitles.size > 0) {
+    const titleRegexes = Array.from(searchTitles).map(
+      (t) => new RegExp(`^${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i")
+    );
+    queryConditions.push({ title: { $in: titleRegexes } });
+  }
+
+  let existingQuestions = [];
+  if (queryConditions.length > 0) {
+    existingQuestions = await Question.find({
+      platform: "CODECHEF",
+      $or: queryConditions
+    }).select("_id externalId title").lean();
+  }
+
+  const existingByCode = new Map();
+  const existingByTitle = new Map();
+  for (const q of existingQuestions) {
+    if (q.externalId) existingByCode.set(q.externalId.toUpperCase(), q);
+    if (q.title) existingByTitle.set(q.title.trim().toLowerCase(), q);
+  }
+
+  const questionUpsertOps = [];
+  const resolvedQuestionMap = new Map();
+
+  for (const p of normalizedProblems) {
+    const codeKey = p.code ? p.code.toUpperCase() : null;
+    const titleKey = p.title ? p.title.trim().toLowerCase() : null;
+
+    const matchedQ = (codeKey && existingByCode.get(codeKey)) || (titleKey && existingByTitle.get(titleKey));
+    if (matchedQ) {
+      resolvedQuestionMap.set(codeKey || titleKey, matchedQ);
+      continue;
+    }
+
+    const fallbackCode = codeKey || (p.title ? p.title.replace(/[^A-Za-z0-9_]/g, "").toUpperCase() : "CODECHEF_PROB");
+    const catalogInfo = (codeKey && codeMap.get(codeKey)) || null;
+    const finalTitle = catalogInfo?.name || p.title || fallbackCode;
+    const finalUrl = catalogInfo?.url || `https://www.codechef.com/problems/${fallbackCode}`;
+    const finalRating = catalogInfo?.rating || null;
+    const finalTags = catalogInfo?.tags || [];
+
+    questionUpsertOps.push({
+      updateOne: {
+        filter: { platform: "CODECHEF", externalId: fallbackCode },
+        update: {
+          $setOnInsert: {
+            platform: "CODECHEF",
+            externalId: fallbackCode,
+            title: finalTitle,
+            url: finalUrl,
+            rating: finalRating,
+            tags: finalTags,
+            difficulty: "N/A"
+          }
+        },
+        upsert: true
+      }
+    });
+  }
+
+  if (questionUpsertOps.length > 0) {
+    await Question.bulkWrite(questionUpsertOps, { ordered: false });
+    const refetched = await Question.find({
+      platform: "CODECHEF",
+      $or: queryConditions
+    }).select("_id externalId title").lean();
+
+    for (const q of refetched) {
+      if (q.externalId) {
+        existingByCode.set(q.externalId.toUpperCase(), q);
+        resolvedQuestionMap.set(q.externalId.toUpperCase(), q);
+      }
+      if (q.title) {
+        existingByTitle.set(q.title.trim().toLowerCase(), q);
+        resolvedQuestionMap.set(q.title.trim().toLowerCase(), q);
+      }
+    }
+  }
+
+  const now = new Date();
+  const stateBulkOps = [];
+  const processedQuestionIds = new Set();
+
+  for (const p of normalizedProblems) {
+    const codeKey = p.code ? p.code.toUpperCase() : null;
+    const titleKey = p.title ? p.title.trim().toLowerCase() : null;
+
+    const matchedQ =
+      (codeKey && resolvedQuestionMap.get(codeKey)) ||
+      (titleKey && resolvedQuestionMap.get(titleKey)) ||
+      (codeKey && existingByCode.get(codeKey)) ||
+      (titleKey && existingByTitle.get(titleKey));
+
+    if (!matchedQ || !matchedQ._id) continue;
+    const qIdStr = String(matchedQ._id);
+    if (processedQuestionIds.has(qIdStr)) continue;
+    processedQuestionIds.add(qIdStr);
+
+    const solvedAt = p.solvedAt || now;
+
+    stateBulkOps.push({
+      updateOne: {
+        filter: { userId: req.user.id, questionId: matchedQ._id },
+        update: {
+          $set: {
+            solved: true,
+            solvedAt,
+            verified: true,
+            verificationMethod: "CODECHEF_EXTENSION"
+          },
+          $setOnInsert: {
+            firstSolvedAt: solvedAt,
+            starred: false
+          }
+        },
+        upsert: true
+      }
+    });
+  }
+
+  if (stateBulkOps.length > 0) {
+    await UserQuestionState.bulkWrite(stateBulkOps, { ordered: false });
+  }
+
+  res.json({
+    success: true,
+    message: `Successfully verified and synced ${stateBulkOps.length} CodeChef problems to your account via extension.`,
+    syncedCount: stateBulkOps.length,
+    matchedCount: processedQuestionIds.size,
+    account
+  });
+}
+
+async function fetchCodeChefUserData(req, res) {
+  const rawHandle = req.body?.handle || req.query?.handle || req.params?.handle || '';
+  const cleanHandle = String(rawHandle).trim().replace(/^@/, '');
+  if (!cleanHandle) {
+    throw httpError(400, 'CodeChef handle is required');
+  }
+
+  const ccAccount = await PlatformAccount.findOne({
+    userId: req.user.id,
+    platform: 'CODECHEF'
+  }).lean();
+  const isVerified = Boolean(
+    ccAccount &&
+    ccAccount.verified &&
+    ccAccount.handle?.toLowerCase() === cleanHandle.toLowerCase()
+  );
+
+  let profileHtml = '';
+  try {
+    const { stdout } = await execFileAsync('curl', [
+      '-s',
+      '-L',
+      '--max-time', '12',
+      '-H', 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      '-H', 'Referer: https://www.codechef.com/',
+      `https://www.codechef.com/users/${encodeURIComponent(cleanHandle)}`
+    ]);
+    profileHtml = stdout;
+  } catch (_) {
+    try {
+      const resp = await fetch(`https://www.codechef.com/users/${encodeURIComponent(cleanHandle)}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Referer': 'https://www.codechef.com/'
+        },
+        signal: AbortSignal.timeout(8000)
+      });
+      if (resp.ok) profileHtml = await resp.text();
+    } catch (e) {}
+  }
+
+  let userRating = 1500;
+  let highestRating = null;
+  let stars = '1★';
+  let globalRank = null;
+  let countryRank = null;
+  let totalProblemsSolved = 0;
+  let contestsCount = 0;
+  const solvedCodes = new Set();
+  let dailySubmissions = [];
+
+  if (profileHtml && typeof profileHtml === 'string') {
+    const ratingMatch = profileHtml.match(/rating-number">\s*(\d+)/i) || profileHtml.match(/class="rating-number">(\d+)</);
+    if (ratingMatch) userRating = parseInt(ratingMatch[1], 10);
+
+    const highestMatch = profileHtml.match(/Highest Rating\s*(\d+)/i) || profileHtml.match(/\(Highest Rating\s*(\d+)\)/i);
+    if (highestMatch) highestRating = parseInt(highestMatch[1], 10);
+
+    const starContainer = profileHtml.match(/class="rating-star">([\s\S]*?)<\/div>/i);
+    if (starContainer) {
+      const starEntityCount = (starContainer[1].match(/&#9733;|\★/gi) || []).length;
+      const spanCount = (starContainer[1].match(/<span/gi) || []).length;
+      const count = starEntityCount || spanCount;
+      if (count > 0) stars = `${count}★`;
+    }
+
+    const globalRankMatch = profileHtml.match(/<a[^>]*href="\/ratings\/all"[^>]*>\s*<strong>\s*(\d+)\s*<\/strong>\s*<\/a>\s*Global Rank/i)
+      || profileHtml.match(/class="rating-ranks">[\s\S]*?<strong>(\d+)<\/strong>\s*<\/a>\s*Global Rank/i)
+      || profileHtml.match(/<strong>(\d+)<\/strong>\s*<\/a>\s*Global Rank/i);
+    if (globalRankMatch) globalRank = parseInt(globalRankMatch[1], 10);
+
+    const countryRankMatch = profileHtml.match(/<a[^>]*href="\/ratings\/all\?filterBy=Country[^"]*"[^>]*>\s*<strong>\s*(\d+)\s*<\/strong>\s*<\/a>\s*Country Rank/i)
+      || profileHtml.match(/<strong>(\d+)<\/strong>\s*<\/a>\s*Country Rank/i);
+    if (countryRankMatch) countryRank = parseInt(countryRankMatch[1], 10);
+
+    const totalSolvedMatch = profileHtml.match(/Total Problems Solved:\s*(\d+)/i)
+      || profileHtml.match(/<h3>Total Problems Solved:\s*(\d+)<\/h3>/i);
+    if (totalSolvedMatch) totalProblemsSolved = parseInt(totalSolvedMatch[1], 10);
+
+    const contestsMatch = profileHtml.match(/Contests\s*\((\d+)\)/i) || profileHtml.match(/No\.\s*of Contests Participated:\s*(\d+)/i);
+    if (contestsMatch) contestsCount = parseInt(contestsMatch[1], 10);
+
+    const idx = profileHtml.indexOf('problems-solved');
+    if (idx !== -1) {
+      const end = profileHtml.indexOf('</section>', idx);
+      const section = profileHtml.slice(idx, end !== -1 ? end : idx + 60000);
+      const spans = Array.from(section.matchAll(/<span[^>]*style="font-size:\s*12px[^>]*>([^<]+)<\/span>/gi)).map(m => m[1].trim());
+      spans.forEach(s => {
+        const rawCode = s.replace(/&nbsp;/g, ' ').replace(/[^A-Za-z0-9_]/g, '').toUpperCase();
+        if (rawCode.length >= 2 && rawCode.length <= 15) {
+          solvedCodes.add(rawCode);
+        }
+      });
+      const statusLinks = Array.from(section.matchAll(/\/status\/([A-Za-z0-9_]+),/gi)).map(m => m[1].toUpperCase());
+      statusLinks.forEach(c => solvedCodes.add(c));
+    }
+
+    const dailyStatsMatch = profileHtml.match(/var\s+userDailySubmissionsStats\s*=\s*(\[[\s\S]*?\]);/);
+    if (dailyStatsMatch) {
+      try {
+        const rawDaily = JSON.parse(dailyStatsMatch[1]);
+        dailySubmissions = rawDaily.map((item) => {
+          const parts = String(item.date).split('-');
+          let formattedDate = item.date;
+          if (parts.length === 3) {
+            formattedDate = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+          }
+          return { date: formattedDate, value: Number(item.value) || 0 };
+        });
+      } catch (_) {}
+    }
+  }
+
+  try {
+    const { stdout: recentJsonStr } = await execFileAsync('curl', [
+      '-s',
+      '-L',
+      '--max-time', '6',
+      '-H', 'User-Agent: Mozilla/5.0',
+      `https://www.codechef.com/recent/user?page=0&user_handle=${encodeURIComponent(cleanHandle)}`
+    ]);
+    const recentData = JSON.parse(recentJsonStr);
+    if (recentData?.content) {
+      const acMatches = Array.from(recentData.content.matchAll(/href="\/problems\/([A-Za-z0-9_]+)"/gi)).map(m => m[1].toUpperCase());
+      acMatches.forEach(c => solvedCodes.add(c));
+    }
+  } catch (_) {}
+
+  res.json({
+    success: true,
+    userSolved: {
+      handle: cleanHandle,
+      userRating,
+      highestRating,
+      stars,
+      globalRank,
+      countryRank,
+      totalProblemsSolved: totalProblemsSolved || solvedCodes.size,
+      contestsCount,
+      solvedCodes: Array.from(solvedCodes),
+      dailySubmissions,
+      isVerified
+    }
+  });
+}
+
 module.exports = {
   listAccounts,
   upsertAccount,
@@ -878,5 +1635,10 @@ module.exports = {
   startLeetCodeChallenge,
   verifyLeetCodeChallenge,
   recordSingleSubmission,
-  syncSolvedProblems
+  syncSolvedProblems,
+  recordCodeChefSubmission,
+  syncCodeChefHistory,
+  fetchLeetCodeUserData,
+  fetchCodeChefUserData
 };
+

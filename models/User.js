@@ -29,9 +29,21 @@ const userSchema = new mongoose.Schema(
     tokenVersion: {
       type: Number,
       default: 0
+    },
+    loginAttempts: {
+      type: Number,
+      default: 0
+    },
+    lockUntil: {
+      type: Date,
+      default: null
     }
   },
   { timestamps: true }
 );
+
+userSchema.virtual('isLocked').get(function () {
+  return this.lockUntil && this.lockUntil > Date.now();
+});
 
 module.exports = mongoose.model('User', userSchema);

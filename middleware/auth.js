@@ -4,13 +4,11 @@ const User = require('../models/User');
 async function auth(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
-
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ message: 'Authentication required' });
     }
 
     const token = authHeader.slice(7).trim();
-
     if (!token) {
       return res.status(401).json({ message: 'Authentication required' });
     }
@@ -35,10 +33,9 @@ async function auth(req, res, next) {
 
     let user;
     try {
-      user = await User.findOne({ username: payload.username })
-        .select('_id username role tokenVersion');
-    } catch (dbErr) {
-      console.warn('Database error in auth middleware:', dbErr.message);
+      user = await User.findOne({ username: payload.username }).select('_id username role tokenVersion');
+    } catch (dbError) {
+      console.warn('Database error in auth middleware:', dbError.message);
       return res.status(503).json({ message: 'Authentication service temporarily unavailable' });
     }
 
@@ -46,7 +43,6 @@ async function auth(req, res, next) {
       return res.status(401).json({ message: 'User associated with token no longer exists' });
     }
 
-    // JWT Revocation check (tokenVersion)
     if (payload.tokenVersion !== undefined && user.tokenVersion !== undefined) {
       if (payload.tokenVersion !== user.tokenVersion) {
         return res.status(401).json({ message: 'Token has been revoked. Please log in again.' });
@@ -68,44 +64,43 @@ async function auth(req, res, next) {
 async function optionalAuth(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return next();
+    }
 
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.slice(7).trim();
-      if (token && process.env.JWT_SECRET) {
-        let payload;
-        try {
-          payload = jwt.verify(token, process.env.JWT_SECRET);
-        } catch {
-          return next();
-        }
+    const token = authHeader.slice(7).trim();
+    if (!token || !process.env.JWT_SECRET) {
+      return next();
+    }
 
-        if (payload && payload.username) {
-          try {
-            const user = await User.findOne({ username: payload.username })
-              .select('_id username role tokenVersion')
-              .lean();
+    let payload;
+    try {
+      payload = jwt.verify(token, process.env.JWT_SECRET);
+    } catch {
+      return next();
+    }
 
-            if (user) {
-              if (payload.tokenVersion !== undefined && user.tokenVersion !== undefined) {
-                if (payload.tokenVersion !== user.tokenVersion) {
-                  return next();
-                }
-              }
+    if (!payload || !payload.username) {
+      return next();
+    }
 
-              req.user = {
-                id: user._id,
-                username: user.username,
-                role: user.role
-              };
-            }
-          } catch {
-            // Non-blocking for optional auth
-          }
-        }
+    try {
+      const user = await User.findOne({ username: payload.username })
+        .select('_id username role tokenVersion')
+        .lean();
+
+      if (user && (payload.tokenVersion === undefined || user.tokenVersion === undefined || payload.tokenVersion === user.tokenVersion)) {
+        req.user = {
+          id: user._id,
+          username: user.username,
+          role: user.role
+        };
       }
+    } catch {
+      // Ignored for optional authentication
     }
   } catch {
-    // Non-blocking for optional auth
+    // Ignored for optional authentication
   }
   next();
 }

@@ -17,14 +17,12 @@ const {
 
 const router = express.Router();
 
-// Public / optionally authenticated
 router.get('/', optionalAuth, asyncHandler(listBlogs));
 router.get('/recent-actions', asyncHandler(getRecentActions));
 router.get('/actions/recent', asyncHandler(getRecentActions));
 router.get('/me/quota', auth, asyncHandler(getUserBlogQuota));
 router.get('/:id', optionalAuth, asyncHandler(getBlog));
 
-// Authenticated write operations
 router.post('/', auth, asyncHandler(createBlog));
 router.put('/:id', auth, asyncHandler(updateBlog));
 router.delete('/:id', auth, asyncHandler(deleteBlog));

@@ -96,7 +96,6 @@ function getDefaultLadder(id) {
   if (!ladder) return null;
 
   const resolvedQuestions = ladder.questions.map((qTemplate, idx) => {
-    // Try finding full question object from catalog
     let found = null;
     if (questionCatalog.isLoaded) {
       const searchRes = questionCatalog.getPaginatedQuestions({

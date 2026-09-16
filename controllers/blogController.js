@@ -25,8 +25,6 @@ function generateSnippet(content, maxLength = 240) {
     .trim();
   return clean.length > maxLength ? clean.slice(0, maxLength).trim() + '...' : clean;
 }
-
-// 1. List Blogs (with Trending / Recent sorting, tag filter, search, pagination)
 async function listBlogs(req, res) {
   const { sort = 'trending', search, tag, author, page = 1, limit = 15 } = req.query;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -54,14 +52,10 @@ async function listBlogs(req, res) {
   }
 
   const userId = req.user ? String(req.user.id || req.user._id) : null;
-
-  // We fetch blogs
   const blogs = await Blog.find(filter)
     .select('-comments -content') // Omit heavy content in list for speed
     .sort({ createdAt: -1 })
     .lean();
-
-  // Compute scores and user votes
   const enriched = blogs.map(blog => {
     const upvotesCount = (blog.upvotes || []).length;
     const downvotesCount = (blog.downvotes || []).length;
@@ -92,15 +86,12 @@ async function listBlogs(req, res) {
       userVote
     };
   });
-
-  // Sort
   if (sort === 'trending') {
     enriched.sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
       return new Date(b.createdAt) - new Date(a.createdAt);
     });
   } else {
-    // Recent
     enriched.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
 
@@ -116,8 +107,6 @@ async function listBlogs(req, res) {
     totalPages: Math.ceil(total / limitNum) || 1
   });
 }
-
-// 2. Codeforces-style "Recent actions" feed
 async function getRecentActions(req, res) {
   // Recent 10 blogs
   const recentBlogs = await Blog.find()
@@ -166,8 +155,6 @@ async function getRecentActions(req, res) {
 
   res.json({ actions: allActions });
 }
-
-// 3. Get single Blog (increments views)
 async function getBlog(req, res) {
   const { id } = req.params;
   if (!mongoose.isValidObjectId(id)) {
@@ -230,8 +217,6 @@ async function getBlog(req, res) {
     }
   });
 }
-
-// 4. Create Blog (Enforces Max 5 blogs per user and Max 50,000 chars size limit)
 async function createBlog(req, res) {
   const userId = req.user.id || req.user._id;
 
@@ -256,17 +241,17 @@ async function createBlog(req, res) {
   if (content.length > 50000) {
     throw httpError(400, 'Blog content exceeds maximum allowed size of 50,000 characters');
   }
-
-  // Clean tags
   const cleanTags = Array.isArray(tags)
     ? tags.map(t => String(t).trim().toLowerCase()).filter(Boolean).slice(0, 10)
     : [];
 
-  const summary = generateSnippet(content, 260);
+  const cleanTitle = sanitizeInput(title.trim());
+  const cleanContent = sanitizeInput(content);
+  const summary = generateSnippet(cleanContent, 260);
 
   const blog = new Blog({
-    title: title.trim(),
-    content,
+    title: cleanTitle,
+    content: cleanContent,
     summary,
     tags: cleanTags,
     authorId: userId,
@@ -284,6 +269,7 @@ async function createBlog(req, res) {
     blog: {
       _id: blog._id,
       title: blog.title,
+      content: blog.content,
       summary: blog.summary,
       tags: blog.tags,
       authorUsername: blog.authorUsername,
@@ -294,8 +280,6 @@ async function createBlog(req, res) {
     }
   });
 }
-
-// 5. Update Blog
 async function updateBlog(req, res) {
   const { id } = req.params;
   if (!mongoose.isValidObjectId(id)) {
@@ -320,14 +304,15 @@ async function updateBlog(req, res) {
   if (title !== undefined) {
     if (!title.trim()) throw httpError(400, 'Blog title cannot be empty');
     if (title.trim().length > 200) throw httpError(400, 'Blog title cannot exceed 200 characters');
-    blog.title = title.trim();
+    blog.title = sanitizeInput(title.trim());
   }
 
   if (content !== undefined) {
     if (!content.trim()) throw httpError(400, 'Blog content cannot be empty');
     if (content.length > 50000) throw httpError(400, 'Blog content exceeds maximum allowed size of 50,000 characters');
-    blog.content = content;
-    blog.summary = generateSnippet(content, 260);
+    const cleanContent = sanitizeInput(content);
+    blog.content = cleanContent;
+    blog.summary = generateSnippet(cleanContent, 260);
   }
 
   if (tags !== undefined && Array.isArray(tags)) {
@@ -347,8 +332,6 @@ async function updateBlog(req, res) {
     }
   });
 }
-
-// 6. Delete Blog
 async function deleteBlog(req, res) {
   const { id } = req.params;
   if (!mongoose.isValidObjectId(id)) {
@@ -372,8 +355,6 @@ async function deleteBlog(req, res) {
 
   res.json({ message: 'Blog deleted successfully' });
 }
-
-// 7. Vote Blog (Upvote / Downvote with 2-minute lock rule)
 async function voteBlog(req, res) {
   const { id } = req.params;
   if (!mongoose.isValidObjectId(id)) {
@@ -464,8 +445,6 @@ async function voteBlog(req, res) {
     userVote
   });
 }
-
-// 8. Add Comment
 async function addComment(req, res) {
   const { id } = req.params;
   if (!mongoose.isValidObjectId(id)) {
@@ -488,7 +467,7 @@ async function addComment(req, res) {
   const newComment = {
     authorId: req.user.id || req.user._id,
     authorUsername: req.user.username,
-    content: content.trim(),
+    content: sanitizeInput(content.trim()),
     createdAt: new Date()
   };
 
@@ -503,8 +482,6 @@ async function addComment(req, res) {
     comment: savedComment
   });
 }
-
-// 9. Delete Comment
 async function deleteComment(req, res) {
   const { id, commentId } = req.params;
   if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(commentId)) {
@@ -536,8 +513,6 @@ async function deleteComment(req, res) {
 
   res.json({ message: 'Comment deleted successfully' });
 }
-
-// 10. Get User's Blog Quota
 async function getUserBlogQuota(req, res) {
   const userId = req.user.id || req.user._id;
   const count = await Blog.countDocuments({ authorId: userId });
@@ -547,8 +522,6 @@ async function getUserBlogQuota(req, res) {
     remaining: Math.max(0, 5 - count)
   });
 }
-
-// 11. Vote Comment (Upvote / Downvote with 2-minute lock rule)
 async function voteComment(req, res) {
   const { id, commentId } = req.params;
   if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(commentId)) {

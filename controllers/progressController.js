@@ -93,7 +93,7 @@ async function listSolved(req, res) {
     const states = await UserQuestionState.find({
       userId: req.user.id,
       solved: true
-    }).select('questionId firstSolvedAt solvedAt').lean().catch(() => []);
+    }).select('questionId firstSolvedAt solvedAt verified verificationMethod').lean().catch(() => []);
 
     const questionIds = states.map(item => item.questionId);
     const resolvedMap = new Map();
