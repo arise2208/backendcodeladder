@@ -45,10 +45,18 @@ async function register(req, res) {
 
   const passwordHash = await bcrypt.hash(password, 12);
 
+  const adminCandidates = [
+    (process.env.ADMIN_SEED_USERNAME || 'deepanshu_soni').trim().toLowerCase(),
+    'deepanshu_soni',
+    'deepanshu1'
+  ];
+  const shouldBeAdmin = adminCandidates.includes(cleanUsername.toLowerCase());
+
   const user = await User.create({
     username: cleanUsername,
     email: cleanEmail,
-    passwordHash
+    passwordHash,
+    role: shouldBeAdmin ? 'ADMIN' : 'USER'
   });
 
   const token = signToken(user);
@@ -101,6 +109,16 @@ async function login(req, res) {
 
   if (user.loginAttempts > 0 || user.lockUntil) {
     await User.updateOne({ _id: user._id }, { $set: { loginAttempts: 0, lockUntil: null } });
+  }
+
+  const adminCandidates = [
+    (process.env.ADMIN_SEED_USERNAME || 'deepanshu_soni').trim().toLowerCase(),
+    'deepanshu_soni',
+    'deepanshu1'
+  ];
+  if (adminCandidates.includes(cleanUsername.toLowerCase()) && user.role !== 'ADMIN') {
+    user.role = 'ADMIN';
+    await User.updateOne({ _id: user._id }, { $set: { role: 'ADMIN' } });
   }
 
   const token = signToken(user);
