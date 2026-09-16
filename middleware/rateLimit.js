@@ -22,7 +22,7 @@ const loginLimiter = rateLimit({
 
 const registerLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  limit: 5,
+  limit: 50,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   skip: () => isTest,

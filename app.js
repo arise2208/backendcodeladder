@@ -37,12 +37,19 @@ app.use(requestId);
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
-  .map(origin => origin.trim())
+  .map(origin => origin.trim().replace(/\/+$/, ''))
   .filter(Boolean);
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+    if (!origin) return callback(null, true);
+    const cleanOrigin = origin.replace(/\/+$/, '');
+    if (
+      allowedOrigins.length === 0 ||
+      allowedOrigins.includes(cleanOrigin) ||
+      /^https:\/\/codeladder.*\.vercel\.app$/.test(cleanOrigin) ||
+      /^http:\/\/localhost:\d+$/.test(cleanOrigin)
+    ) {
       return callback(null, true);
     }
     callback(new Error('CORS: origin not allowed'));
