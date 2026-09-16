@@ -1073,9 +1073,14 @@ async function syncSolvedProblems(req, res) {
                   externalId: code,
                   title,
                   url,
+                  difficulty: rating ? String(rating) : "Practice"
+                },
+                $set: {
+                  title,
+                  url,
                   rating,
                   tags,
-                  difficulty: rating ? String(rating) : "N/A"
+                  difficulty: rating ? String(rating) : "Practice"
                 }
               },
               upsert: true
@@ -1339,6 +1344,26 @@ async function syncCodeChefHistory(req, res) {
     await account.save();
   }
 
+  // Remove any previously inserted bogus stripped-title CodeChef questions
+  const bogusCodes = [
+    "MEXTREEMIN", "MAXIMUMMST", "MAXADDS", "MARBLECOLLECTOR", "MAKEANAP", "LOSTINTHEFEST",
+    "LIGHTALL", "HUHEASY", "FLIPPREFIX", "EQUATEXY", "DRAFTPICKS", "CUTESUBSTRINGS",
+    "CABRIDES", "AVOIDPRIMES", "ARRAYOPERATIONS", "ADDPERMUTATION", "ADD1OR3", "3PATHS",
+    "EVENTUALLYEQUAL", "NEWOPERATION", "UNLOCKTHESAFE", "TRANSFORMSTRING", "TIMEPENALTY",
+    "SWAPSINASTRING", "SUBSETSUM3", "SUBSEQUENCESORT", "STRINGDELETIONS", "STREAKSTAR",
+    "STOPTHECOUNT", "SMALLPALINDROME", "SHIFTANDSORT", "RANGEMEX", "MYSTICSLIMES",
+    "PARRYITEASY", "PALINDROMECHECK", "OVERWRITE", "ONESANDZEROESII", "ONESANDZEROESI",
+    "SECURITYLINES", "NUTRITIONCOST", "NUMBERWALKS", "NO3PLEASE"
+  ];
+  try {
+    const bogusQuestions = await Question.find({ platform: "CODECHEF", externalId: { $in: bogusCodes } }).select("_id").lean();
+    if (bogusQuestions.length > 0) {
+      const bogusIds = bogusQuestions.map(q => q._id);
+      await UserQuestionState.deleteMany({ questionId: { $in: bogusIds } });
+      await Question.deleteMany({ _id: { $in: bogusIds } });
+    }
+  } catch (_) {}
+
   const { nameMap, codeMap } = getCodeChefContestCatalog();
 
   const normalizedProblems = [];
@@ -1436,25 +1461,28 @@ async function syncCodeChefHistory(req, res) {
       continue;
     }
 
-    const fallbackCode = codeKey || (p.title ? p.title.replace(/[^A-Za-z0-9_]/g, "").toUpperCase() : "CODECHEF_PROB");
-    const catalogInfo = (codeKey && codeMap.get(codeKey)) || null;
+    const fallbackCode = codeKey || (p.title && nameMap.get(p.title.toLowerCase())) || (p.title ? p.title.replace(/[^A-Za-z0-9_]/g, "").toUpperCase() : "CODECHEF_PROB");
+    const catalogInfo = (fallbackCode && codeMap.get(fallbackCode)) || (p.title && codeMap.get(nameMap.get(p.title.toLowerCase()))) || null;
     const finalTitle = catalogInfo?.name || p.title || fallbackCode;
     const finalUrl = catalogInfo?.url || `https://www.codechef.com/problems/${fallbackCode}`;
     const finalRating = catalogInfo?.rating || null;
-    const finalTags = catalogInfo?.tags || [];
+    const finalTags = Array.isArray(catalogInfo?.tags) ? catalogInfo.tags : [];
+    const finalDifficulty = finalRating ? String(finalRating) : "Practice";
 
     questionUpsertOps.push({
       updateOne: {
         filter: { platform: "CODECHEF", externalId: fallbackCode },
         update: {
-          $setOnInsert: {
-            platform: "CODECHEF",
-            externalId: fallbackCode,
+          $set: {
             title: finalTitle,
             url: finalUrl,
             rating: finalRating,
             tags: finalTags,
-            difficulty: "N/A"
+            difficulty: finalDifficulty
+          },
+          $setOnInsert: {
+            platform: "CODECHEF",
+            externalId: fallbackCode
           }
         },
         upsert: true
