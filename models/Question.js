@@ -5,7 +5,8 @@ const questionSchema = new mongoose.Schema(
     platform: {
       type: String,
       required: true,
-      enum: ['LEETCODE', 'CODEFORCES', 'CODECHEF', 'ATCODER'],
+      uppercase: true,
+      trim: true,
       index: true
     },
     externalId: {
@@ -29,8 +30,27 @@ const questionSchema = new mongoose.Schema(
     },
     difficulty: {
       type: String,
-      enum: ['EASY', 'MEDIUM', 'HARD'],
+      default: 'N/A',
+      trim: true
+    },
+    // Codeforces, CodeChef, and AtCoder use numeric Elo ratings
+    rating: {
+      type: Number,
+      min: 0,
+      index: true,
       default: undefined
+    },
+    // Direct mapping to Contest
+    contestId: {
+      type: String,
+      trim: true,
+      default: null,
+      index: true
+    },
+    problemIndex: {
+      type: String,
+      trim: true,
+      default: null
     },
     metadata: {
       type: mongoose.Schema.Types.Mixed,
@@ -40,9 +60,23 @@ const questionSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Compound unique index on platform + externalId
 questionSchema.index(
   { platform: 1, externalId: 1 },
   { unique: true }
 );
+
+// Compound index for rating queries
+questionSchema.index({ platform: 1, rating: 1 });
+
+// Pre-validation hook: normalize platform & set difficulty default
+questionSchema.pre('validate', function () {
+  if (this.platform) {
+    this.platform = this.platform.toUpperCase();
+  }
+  if (this.platform !== 'LEETCODE' && !this.difficulty) {
+    this.difficulty = 'N/A';
+  }
+});
 
 module.exports = mongoose.model('Question', questionSchema);

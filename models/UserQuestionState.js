@@ -27,6 +27,15 @@ const userQuestionStateSchema = new mongoose.Schema(
     starred: {
       type: Boolean,
       default: false
+    },
+    verified: {
+      type: Boolean,
+      default: false
+    },
+    verificationMethod: {
+      type: String,
+      enum: ['LEETCODE_CHALLENGE', 'CODEFORCES_API', 'SCRAPE', 'MANUAL_UNVERIFIED', 'UNVERIFIED'],
+      default: 'UNVERIFIED'
     }
   },
   { timestamps: true }
@@ -38,6 +47,7 @@ userQuestionStateSchema.index(
 );
 userQuestionStateSchema.index({ userId: 1, solved: 1 });
 userQuestionStateSchema.index({ userId: 1, starred: 1 });
+userQuestionStateSchema.index({ userId: 1, verified: 1 });
 
 module.exports = mongoose.model(
   'UserQuestionState',

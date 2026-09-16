@@ -28,19 +28,21 @@ async function startServer() {
 
     await mongoose.connect(MONGODB_URI);
 
-    console.log('MongoDB connected successfully');
+    const conn = mongoose.connection;
+    console.log(`[DB] Connected successfully to database: "${conn.name}" on ${conn.host}:${conn.port}`);
+
+    conn.on('disconnected', () => {
+      console.warn('[DB] MongoDB disconnected!');
+    });
+    conn.on('reconnected', () => {
+      console.log(`[DB] MongoDB reconnected to: "${conn.name}" on ${conn.host}:${conn.port}`);
+    });
 
     try {
-      const User = require('./models/User');
-      const promoResult = await User.updateMany(
-        { username: { $in: [/^deepanshu$/i, /^admin$/i] } },
-        { $set: { role: 'ADMIN' } }
-      );
-      if (promoResult.modifiedCount > 0) {
-        console.log(`Promoted admin accounts (${promoResult.modifiedCount} updated)`);
-      }
-    } catch (promoErr) {
-      console.warn('Admin auto-promotion notice:', promoErr.message);
+      const questionCatalog = require('./services/questionCatalog');
+      await questionCatalog.syncFromDatabase();
+    } catch (catErr) {
+      console.warn('Question catalog DB sync notice:', catErr.message);
     }
 
     // -----------------------------------------------

@@ -143,7 +143,28 @@ const adminLimiter = rateLimit({
 });
 
 
+
+/*
+ * Question & Catalog browsing
+ *
+ * 120 requests / minute / IP
+ */
+const catalogLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: isDev ? 5000 : 120,
+
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+
+  skip: () => isTest,
+
+  message: {
+    error: "Too many requests. Please slow down your browsing pace."
+  }
+});
+
 module.exports = {
+  catalogLimiter,
   generalLimiter,
   loginLimiter,
   registerLimiter,

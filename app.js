@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const mongoose = require('mongoose');
 
 // Routes
 const authRoutes = require('./routes/auth');
@@ -10,6 +11,7 @@ const ladderRoutes = require('./routes/ladders');
 const blogRoutes = require('./routes/blogs');
 const platformAccountRoutes = require('./routes/platformAccounts');
 const adminRoutes = require('./routes/admin');
+const contestRoutes = require('./routes/contests');
 
 // Middleware
 const notFound = require('./middleware/notFound');
@@ -19,10 +21,13 @@ const {
   generalLimiter,
   loginLimiter,
   registerLimiter,
-  adminLimiter
+  adminLimiter,
+  catalogLimiter
 } = require('./middleware/rateLimit');
 
 const app = express();
+
+app.set('trust proxy', 1);
 
 /*
  * --------------------------------------------------
@@ -33,8 +38,17 @@ const app = express();
 // CORS
 app.use(cors());
 
-// Parse JSON request bodies
-app.use(express.json({ limit: '1mb' }));
+// Security headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  next();
+});
+
+
+// Parse JSON request bodies (increased limit for batch sync payloads)
+app.use(express.json({ limit: '10mb' }));
 
 /*
  * --------------------------------------------------
@@ -58,9 +72,17 @@ app.use('/api', generalLimiter);
  */
 
 app.get('/api/health', (req, res) => {
-  res.status(200).json({
-    ok: true,
-    service: 'codeladder-api'
+  const conn = mongoose.connection;
+  const isConnected = conn.readyState === 1;
+  res.status(isConnected ? 200 : 503).json({
+    ok: isConnected,
+    service: 'codeladder-api',
+    database: {
+      connected: isConnected,
+      host: conn.host || null,
+      port: conn.port || null,
+      name: conn.name || null
+    }
   });
 });
 
@@ -85,7 +107,7 @@ app.use('/api/auth', authRoutes);
  * --------------------------------------------------
  */
 
-app.use('/api/questions', questionRoutes);
+app.use('/api/questions', catalogLimiter, questionRoutes);
 
 app.use('/api/me', meRoutes);
 
@@ -96,6 +118,7 @@ app.use('/api/ladders', ladderRoutes);
 app.use('/api/blogs', blogRoutes);
 
 app.use('/api/platform-accounts', platformAccountRoutes);
+app.use('/api/contests', contestRoutes);
 
 /*
  * --------------------------------------------------

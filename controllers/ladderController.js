@@ -7,6 +7,8 @@ const UserQuestionState = require('../models/UserQuestionState');
 const UserLadderQuestionPractice = require('../models/UserLadderQuestionPractice');
 const User = require('../models/User');
 const httpError = require('../utils/httpError');
+const defaultLadders = require('../services/defaultLadders');
+const questionCatalog = require('../services/questionCatalog');
 
 async function createLadder(req, res) {
   const { title } = req.body;
@@ -34,138 +36,198 @@ async function createLadder(req, res) {
 }
 
 async function listLadders(req, res) {
-  const memberships = await LadderMember.find({
-    userId: req.user.id
-  }).select('ladderId role').lean();
-
-  const owned = await Ladder.find({
-    ownerId: req.user.id
-  }).select('_id title ownerId mode isPublic publishedAt description revisionStartedAt createdAt updatedAt likes dislikes').lean();
-
-  const ownedIds = new Set(owned.map(ladder => String(ladder._id)));
-
-  const memberIds = memberships
-    .map(item => item.ladderId)
-    .filter(id => !ownedIds.has(String(id)));
-
-  const memberLadders = await Ladder.find({
-    _id: { $in: memberIds }
-  }).select('_id title ownerId mode isPublic publishedAt description revisionStartedAt createdAt updatedAt likes dislikes').lean();
-
-  const memberRole = new Map(
-    memberships.map(item => [String(item.ladderId), item.role])
-  );
-
-  const allLadders = [
-    ...owned.map(ladder => ({ ...ladder, role: 'OWNER' })),
-    ...memberLadders.map(ladder => ({
-      ...ladder,
-      role: memberRole.get(String(ladder._id))
-    }))
-  ];
-
-  // Fetch question counts and member counts for all ladders
-  const allLadderIds = allLadders.map(l => l._id);
-
-  const [questionCounts, memberCounts, solvedCounts] = await Promise.all([
-    LadderQuestion.aggregate([
-      { $match: { ladderId: { $in: allLadderIds } } },
-      { $group: { _id: '$ladderId', count: { $sum: 1 } } }
-    ]),
-    LadderMember.aggregate([
-      { $match: { ladderId: { $in: allLadderIds } } },
-      { $group: { _id: '$ladderId', count: { $sum: 1 } } }
-    ]),
-    // Get solved counts for the current user across all ladders
-    (async () => {
-      const allLadderQuestions = await LadderQuestion.find({
-        ladderId: { $in: allLadderIds }
-      }).select('ladderId questionId').lean();
-
-      const questionIds = [...new Set(allLadderQuestions.map(lq => lq.questionId))];
-
-      const solvedStates = await UserQuestionState.find({
-        userId: req.user.id,
-        questionId: { $in: questionIds },
-        solved: true
-      }).select('questionId').lean();
-
-      const solvedSet = new Set(solvedStates.map(s => String(s.questionId)));
-
-      const counts = {};
-      for (const lq of allLadderQuestions) {
-        const lid = String(lq.ladderId);
-        if (!counts[lid]) counts[lid] = 0;
-        if (solvedSet.has(String(lq.questionId))) counts[lid]++;
-      }
-      return Object.entries(counts).map(([id, count]) => ({ _id: new mongoose.Types.ObjectId(id), count }));
-    })()
-  ]);
-
-  const qCountMap = new Map(questionCounts.map(c => [String(c._id), c.count]));
-  const mCountMap = new Map(memberCounts.map(c => [String(c._id), c.count]));
-  const sCountMap = new Map(solvedCounts.map(c => [String(c._id), c.count]));
-
-  let containsQuestionSet = new Set();
-  if (req.query.questionId && mongoose.isValidObjectId(req.query.questionId)) {
-    const existing = await LadderQuestion.find({
-      ladderId: { $in: allLadderIds },
-      questionId: req.query.questionId
-    }).select('ladderId').lean();
-    containsQuestionSet = new Set(existing.map(item => String(item.ladderId)));
+  if (!req.user) {
+    return res.json({ ladders: [] });
   }
 
-  const userId = req.user ? String(req.user.id) : null;
+  try {
+    const memberships = await LadderMember.find({
+      userId: req.user.id
+    }).select('ladderId role').lean().catch(() => []);
 
-  res.json({
-    ladders: allLadders.map(ladder => {
-      const isLiked = userId && (ladder.likes || []).some(id => String(id) === userId);
-      const isDisliked = userId && (ladder.dislikes || []).some(id => String(id) === userId);
-      const upvotesCount = (ladder.likes || []).length;
-      const downvotesCount = (ladder.dislikes || []).length;
-      const normalizedVote = isLiked ? 'UPVOTE' : isDisliked ? 'DOWNVOTE' : null;
+    const owned = await Ladder.find({
+      ownerId: req.user.id
+    }).select('_id title ownerId mode isPublic publishedAt description revisionStartedAt createdAt updatedAt likes dislikes').lean().catch(() => []);
 
-      return {
+    const ownedIds = new Set(owned.map(ladder => String(ladder._id)));
+
+    const memberIds = memberships
+      .map(item => item.ladderId)
+      .filter(id => !ownedIds.has(String(id)));
+
+    const memberLadders = await Ladder.find({
+      _id: { $in: memberIds }
+    }).select('_id title ownerId mode isPublic publishedAt description revisionStartedAt createdAt updatedAt likes dislikes').lean().catch(() => []);
+
+    const memberRole = new Map(
+      memberships.map(item => [String(item.ladderId), item.role])
+    );
+
+    const allLadders = [
+      ...owned.map(ladder => ({ ...ladder, role: 'OWNER' })),
+      ...memberLadders.map(ladder => ({
         ...ladder,
-        questionCount: qCountMap.get(String(ladder._id)) || 0,
-        memberCount: (mCountMap.get(String(ladder._id)) || 0) + 1, // +1 for owner
-        solvedCount: sCountMap.get(String(ladder._id)) || 0,
-        hasQuestion: containsQuestionSet.has(String(ladder._id)),
-        likesCount: upvotesCount,
-        dislikesCount: downvotesCount,
-        upvotesCount,
-        downvotesCount,
-        score: upvotesCount - downvotesCount,
-        userVote: normalizedVote,
-        userVoteLegacy: isLiked ? 'LIKE' : isDisliked ? 'DISLIKE' : null
-      };
-    })
-  });
+        role: memberRole.get(String(ladder._id))
+      }))
+    ];
+
+    // Fetch question counts and member counts for all ladders
+    const allLadderIds = allLadders.map(l => l._id);
+
+    const [questionCounts, memberCounts, solvedCounts] = await Promise.all([
+      LadderQuestion.aggregate([
+        { $match: { ladderId: { $in: allLadderIds } } },
+        { $group: { _id: '$ladderId', count: { $sum: 1 } } }
+      ]).catch(() => []),
+      LadderMember.aggregate([
+        { $match: { ladderId: { $in: allLadderIds } } },
+        { $group: { _id: '$ladderId', count: { $sum: 1 } } }
+      ]).catch(() => []),
+      // Get solved counts for the current user across all ladders
+      (async () => {
+        try {
+          const allLadderQuestions = await LadderQuestion.find({
+            ladderId: { $in: allLadderIds }
+          }).select('ladderId questionId').lean();
+
+          const questionIds = [...new Set(allLadderQuestions.map(lq => lq.questionId))];
+
+          const solvedStates = await UserQuestionState.find({
+            userId: req.user.id,
+            questionId: { $in: questionIds },
+            solved: true
+          }).select('questionId').lean();
+
+          const solvedSet = new Set(solvedStates.map(s => String(s.questionId)));
+
+          const counts = {};
+          for (const lq of allLadderQuestions) {
+            const lid = String(lq.ladderId);
+            if (!counts[lid]) counts[lid] = 0;
+            if (solvedSet.has(String(lq.questionId))) counts[lid]++;
+          }
+          return Object.entries(counts).map(([id, count]) => ({ _id: new mongoose.Types.ObjectId(id), count }));
+        } catch {
+          return [];
+        }
+      })()
+    ]);
+
+    const qCountMap = new Map(questionCounts.map(c => [String(c._id), c.count]));
+    const mCountMap = new Map(memberCounts.map(c => [String(c._id), c.count]));
+    const sCountMap = new Map(solvedCounts.map(c => [String(c._id), c.count]));
+
+    let containsQuestionSet = new Set();
+    if (req.query.questionId && mongoose.isValidObjectId(req.query.questionId)) {
+      const existing = await LadderQuestion.find({
+        ladderId: { $in: allLadderIds },
+        questionId: req.query.questionId
+      }).select('ladderId').lean().catch(() => []);
+      containsQuestionSet = new Set(existing.map(item => String(item.ladderId)));
+    }
+
+    const userId = req.user ? String(req.user.id) : null;
+
+    res.json({
+      ladders: allLadders.map(ladder => {
+        const isLiked = userId && (ladder.likes || []).some(id => String(id) === userId);
+        const isDisliked = userId && (ladder.dislikes || []).some(id => String(id) === userId);
+        const upvotesCount = (ladder.likes || []).length;
+        const downvotesCount = (ladder.dislikes || []).length;
+        const normalizedVote = isLiked ? 'UPVOTE' : isDisliked ? 'DOWNVOTE' : null;
+
+        return {
+          ...ladder,
+          questionCount: qCountMap.get(String(ladder._id)) || 0,
+          memberCount: (mCountMap.get(String(ladder._id)) || 0) + 1, // +1 for owner
+          solvedCount: sCountMap.get(String(ladder._id)) || 0,
+          hasQuestion: containsQuestionSet.has(String(ladder._id)),
+          likesCount: upvotesCount,
+          dislikesCount: downvotesCount,
+          upvotesCount,
+          downvotesCount,
+          score: upvotesCount - downvotesCount,
+          userVote: normalizedVote,
+          userVoteLegacy: isLiked ? 'LIKE' : isDisliked ? 'DISLIKE' : null
+        };
+      })
+    });
+  } catch (err) {
+    console.error('Error in listLadders:', err);
+    res.json({ ladders: [] });
+  }
 }
 
 async function getLadder(req, res) {
+  const ladderId = req.params.ladderId;
+
+  // Handle curated/default ladders (e.g. default-blind-75)
+  if (req.isDefaultLadder || (typeof ladderId === 'string' && ladderId.startsWith('default-'))) {
+    const curated = defaultLadders.getDefaultLadder(ladderId);
+    if (curated) {
+      // If user is authenticated, check solved/starred state
+      if (req.user && req.user.id) {
+        try {
+          const qIds = curated.questions.map(q => q._id);
+          const states = await UserQuestionState.find({
+            userId: req.user.id,
+            questionId: { $in: qIds }
+          }).lean().catch(() => []);
+
+          const stateMap = new Map(states.map(s => [String(s.questionId), s]));
+          curated.questions = curated.questions.map(q => ({
+            ...q,
+            state: {
+              solved: stateMap.get(String(q._id))?.solved || false,
+              starred: stateMap.get(String(q._id))?.starred || false
+            }
+          }));
+        } catch {
+          // Graceful fallback
+        }
+      }
+
+      return res.json({
+        ladder: curated.ladder,
+        role: req.ladderAccess?.role || 'READ',
+        questions: curated.questions
+      });
+    }
+  }
+
   const ladderQuestions = await LadderQuestion.find({
     ladderId: req.ladder._id
-  }).sort({ order: 1 }).lean();
+  }).sort({ order: 1 }).lean().catch(() => []);
 
   const questionIds = ladderQuestions.map(item => item.questionId);
+  const userId = req.user ? req.user.id : null;
 
-  const [questions, states, practices] = await Promise.all([
-    Question.find({ _id: { $in: questionIds } }).lean(),
-    UserQuestionState.find({
-      userId: req.user.id,
+  const [dbQuestions, states, practices] = await Promise.all([
+    Question.find({ _id: { $in: questionIds } }).lean().catch(() => []),
+    userId ? UserQuestionState.find({
+      userId,
       questionId: { $in: questionIds }
-    }).lean(),
-    UserLadderQuestionPractice.find({
-      userId: req.user.id,
+    }).lean().catch(() => []) : [],
+    userId ? UserLadderQuestionPractice.find({
+      userId,
       ladderId: req.ladder._id,
       questionId: { $in: questionIds }
-    }).lean()
+    }).lean().catch(() => []) : []
   ]);
 
   const questionById = new Map(
-    questions.map(question => [String(question._id), question])
+    dbQuestions.map(question => [String(question._id), question])
   );
+
+  // Fallback to in-memory questionCatalog for questions not found in DB collection
+  for (const qId of questionIds) {
+    const sId = String(qId);
+    if (!questionById.has(sId)) {
+      const catQ = questionCatalog.getQuestionById(sId);
+      if (catQ) questionById.set(sId, catQ);
+    }
+  }
+
   const stateByQuestion = new Map(
     states.map(state => [String(state.questionId), state])
   );
@@ -174,13 +236,13 @@ async function getLadder(req, res) {
   );
 
   const result = ladderQuestions
-    .map(lq => {
+    .map((lq, idx) => {
       const question = questionById.get(String(lq.questionId));
       if (!question) return null;
 
       return {
         ...question,
-        order: lq.order,
+        order: lq.order !== undefined ? lq.order : idx + 1,
         state: {
           solved: stateByQuestion.get(String(lq.questionId))?.solved || false,
           starred: stateByQuestion.get(String(lq.questionId))?.starred || false
@@ -193,20 +255,22 @@ async function getLadder(req, res) {
     })
     .filter(Boolean);
 
-  const userId = req.user ? String(req.user.id) : null;
-  const isLiked = userId && (req.ladder.likes || []).some(id => String(id) === userId);
-  const isDisliked = userId && (req.ladder.dislikes || []).some(id => String(id) === userId);
+  const isLiked = userId && (req.ladder.likes || []).some(id => String(id) === String(userId));
+  const isDisliked = userId && (req.ladder.dislikes || []).some(id => String(id) === String(userId));
   const upvotesCount = (req.ladder.likes || []).length;
   const downvotesCount = (req.ladder.dislikes || []).length;
   const normalizedVote = isLiked ? 'UPVOTE' : isDisliked ? 'DOWNVOTE' : null;
 
-  const owner = await User.findById(req.ladder.ownerId).select('username').lean();
+  let owner = null;
+  if (req.ladder.ownerId && mongoose.isValidObjectId(req.ladder.ownerId)) {
+    owner = await User.findById(req.ladder.ownerId).select('username').lean().catch(() => null);
+  }
   const ladderObj = req.ladder.toObject ? req.ladder.toObject() : { ...req.ladder };
 
   res.json({
     ladder: {
       ...ladderObj,
-      ownerUsername: owner?.username || 'Anonymous',
+      ownerUsername: owner?.username || ladderObj.ownerUsername || 'Anonymous',
       likesCount: upvotesCount,
       dislikesCount: downvotesCount,
       upvotesCount,
@@ -215,7 +279,7 @@ async function getLadder(req, res) {
       userVote: normalizedVote,
       userVoteLegacy: isLiked ? 'LIKE' : isDisliked ? 'DISLIKE' : null
     },
-    role: req.ladderAccess.role,
+    role: req.ladderAccess?.role || 'READ',
     questions: result
   });
 }
@@ -278,6 +342,9 @@ async function addQuestion(req, res) {
     const uniqueRequested = Array.from(new Set(questionIds.map(String)));
     const validQuestions = await Question.find({ _id: { $in: uniqueRequested } }).select('_id');
     const validSet = new Set(validQuestions.map(q => String(q._id)));
+    for (const id of uniqueRequested) {
+      if (questionCatalog.getQuestionById(id)) validSet.add(id);
+    }
 
     const existingInLadder = await LadderQuestion.find({
       ladderId: req.ladder._id,
@@ -315,7 +382,10 @@ async function addQuestion(req, res) {
     throw httpError(400, 'Invalid questionId');
   }
 
-  const question = await Question.findById(questionId).select('_id');
+  let question = await Question.findById(questionId).select('_id');
+  if (!question) {
+    question = questionCatalog.getQuestionById(questionId);
+  }
 
   if (!question) {
     throw httpError(404, 'Question not found');
@@ -442,48 +512,26 @@ async function practise(req, res) {
 
   const now = new Date();
 
-  const [practice, state] = await Promise.all([
-    UserLadderQuestionPractice.findOneAndUpdate(
-      {
-        userId: req.user.id,
-        ladderId: req.ladder._id,
-        questionId: req.params.questionId
-      },
-      {
-        $set: {
-          practised: true,
-          practisedAt: now
-        }
-      },
-      {
-        returnDocument: 'after',
-        upsert: true,
-        setDefaultsOnInsert: true
+  const practice = await UserLadderQuestionPractice.findOneAndUpdate(
+    {
+      userId: req.user.id,
+      ladderId: req.ladder._id,
+      questionId: req.params.questionId
+    },
+    {
+      $set: {
+        practised: true,
+        practisedAt: now
       }
-    ),
-    UserQuestionState.findOneAndUpdate(
-      {
-        userId: req.user.id,
-        questionId: ladderQuestion.questionId
-      },
-      {
-        $set: {
-          solved: true,
-          solvedAt: now
-        },
-        $setOnInsert: {
-          firstSolvedAt: now
-        }
-      },
-      {
-        returnDocument: 'after',
-        upsert: true,
-        setDefaultsOnInsert: true
-      }
-    )
-  ]);
+    },
+    {
+      returnDocument: 'after',
+      upsert: true,
+      setDefaultsOnInsert: true
+    }
+  );
 
-  res.json({ practice, state });
+  res.json({ practice });
 }
 
 async function clearPractice(req, res) {
@@ -750,49 +798,54 @@ async function publishLadder(req, res) {
 }
 
 async function listMarketplaceLadders(req, res) {
-  const publicLadders = await Ladder.find({ isPublic: true })
-    .populate('ownerId', 'username role')
-    .sort({ publishedAt: -1, createdAt: -1 })
-    .lean();
+  try {
+    const publicLadders = await Ladder.find({ isPublic: true })
+      .populate('ownerId', 'username role')
+      .sort({ publishedAt: -1, createdAt: -1 })
+      .lean()
+      .catch(() => []);
 
-  const ladderIds = publicLadders.map(l => l._id);
+    const ladderIds = publicLadders.map(l => l._id);
 
-  const [questionCounts, solvedCounts] = await Promise.all([
-    LadderQuestion.aggregate([
-      { $match: { ladderId: { $in: ladderIds } } },
-      { $group: { _id: '$ladderId', count: { $sum: 1 } } }
-    ]),
-    (async () => {
-      if (!req.user) return [];
-      const allLadderQuestions = await LadderQuestion.find({
-        ladderId: { $in: ladderIds }
-      }).select('ladderId questionId').lean();
+    const [questionCounts, solvedCounts] = await Promise.all([
+      LadderQuestion.aggregate([
+        { $match: { ladderId: { $in: ladderIds } } },
+        { $group: { _id: '$ladderId', count: { $sum: 1 } } }
+      ]).catch(() => []),
+      (async () => {
+        if (!req.user) return [];
+        try {
+          const allLadderQuestions = await LadderQuestion.find({
+            ladderId: { $in: ladderIds }
+          }).select('ladderId questionId').lean();
 
-      const questionIds = [...new Set(allLadderQuestions.map(lq => lq.questionId))];
+          const questionIds = [...new Set(allLadderQuestions.map(lq => lq.questionId))];
 
-      const solvedStates = await UserQuestionState.find({
-        userId: req.user.id,
-        questionId: { $in: questionIds },
-        solved: true
-      }).select('questionId').lean();
+          const solvedStates = await UserQuestionState.find({
+            userId: req.user.id,
+            questionId: { $in: questionIds },
+            solved: true
+          }).select('questionId').lean();
 
-      const solvedSet = new Set(solvedStates.map(s => String(s.questionId)));
+          const solvedSet = new Set(solvedStates.map(s => String(s.questionId)));
 
-      const counts = {};
-      for (const lq of allLadderQuestions) {
-        const lid = String(lq.ladderId);
-        if (!counts[lid]) counts[lid] = 0;
-        if (solvedSet.has(String(lq.questionId))) counts[lid]++;
-      }
-      return Object.entries(counts).map(([id, count]) => ({ _id: new mongoose.Types.ObjectId(id), count }));
-    })()
-  ]);
+          const counts = {};
+          for (const lq of allLadderQuestions) {
+            const lid = String(lq.ladderId);
+            if (!counts[lid]) counts[lid] = 0;
+            if (solvedSet.has(String(lq.questionId))) counts[lid]++;
+          }
+          return Object.entries(counts).map(([id, count]) => ({ _id: new mongoose.Types.ObjectId(id), count }));
+        } catch {
+          return [];
+        }
+      })()
+    ]);
 
-  const qCountMap = new Map(questionCounts.map(c => [String(c._id), c.count]));
-  const sCountMap = new Map(solvedCounts.map(c => [String(c._id), c.count]));
+    const qCountMap = new Map(questionCounts.map(c => [String(c._id), c.count]));
+    const sCountMap = new Map(solvedCounts.map(c => [String(c._id), c.count]));
 
-  res.json({
-    ladders: publicLadders.map(ladder => {
+    const dbResults = publicLadders.map(ladder => {
       const isLiked = req.user && (ladder.likes || []).some(id => String(id) === String(req.user.id));
       const isDisliked = req.user && (ladder.dislikes || []).some(id => String(id) === String(req.user.id));
       const upvotesCount = (ladder.likes || []).length;
@@ -801,7 +854,7 @@ async function listMarketplaceLadders(req, res) {
 
       return {
         ...ladder,
-        ownerUsername: ladder.ownerId?.username || 'Anonymous',
+        ownerUsername: ladder.ownerId?.username || ladder.ownerUsername || 'Anonymous',
         questionCount: qCountMap.get(String(ladder._id)) || 0,
         solvedCount: sCountMap.get(String(ladder._id)) || 0,
         likesCount: upvotesCount,
@@ -813,8 +866,21 @@ async function listMarketplaceLadders(req, res) {
         userVoteLegacy: isLiked ? 'LIKE' : isDisliked ? 'DISLIKE' : null,
         isOwner: req.user ? String(ladder.ownerId?._id || ladder.ownerId) === String(req.user.id) : false
       };
-    })
-  });
+    });
+
+    const curatedDefaults = defaultLadders.getDefaultMarketplaceLadders();
+    const existingTitles = new Set(dbResults.map(l => l.title.toLowerCase()));
+    const additionalCurated = curatedDefaults.filter(c => !existingTitles.has(c.title.toLowerCase()));
+
+    res.json({
+      ladders: [...dbResults, ...additionalCurated]
+    });
+  } catch (err) {
+    console.error('Error in listMarketplaceLadders:', err);
+    res.json({
+      ladders: defaultLadders.getDefaultMarketplaceLadders()
+    });
+  }
 }
 
 async function voteLadder(req, res) {
@@ -906,7 +972,54 @@ async function voteLadder(req, res) {
   });
 }
 
+
+async function transferOwnership(req, res) {
+  const ladderId = req.ladder._id;
+  const { newOwnerUsername } = req.body;
+
+  if (!newOwnerUsername || typeof newOwnerUsername !== "string" || !newOwnerUsername.trim()) {
+    throw httpError(400, "newOwnerUsername is required");
+  }
+
+  const cleanUsername = newOwnerUsername.trim();
+  const newOwner = await User.findOne({ username: cleanUsername });
+  if (!newOwner) {
+    throw httpError(404, `User "${cleanUsername}" not found`);
+  }
+
+  if (String(newOwner._id) === String(req.ladder.ownerId)) {
+    throw httpError(400, "User is already the owner of this ladder");
+  }
+
+  const oldOwnerId = req.ladder.ownerId;
+
+  // 1. Update ladder ownerId
+  req.ladder.ownerId = newOwner._id;
+  await req.ladder.save();
+
+  // 2. Remove new owner from LadderMember if they were a member
+  await LadderMember.deleteOne({ ladderId, userId: newOwner._id });
+
+  // 3. Add old owner as a WRITE member so they retain collaborator rights
+  await LadderMember.findOneAndUpdate(
+    { ladderId, userId: oldOwnerId },
+    { $set: { role: "WRITE" } },
+    { upsert: true }
+  );
+
+  res.json({
+    message: `Ownership successfully transferred to ${newOwner.username}`,
+    ladder: {
+      _id: req.ladder._id,
+      title: req.ladder.title,
+      ownerId: newOwner._id,
+      ownerUsername: newOwner.username
+    }
+  });
+}
+
 module.exports = {
+  transferOwnership,
   createLadder,
   listLadders,
   getLadder,

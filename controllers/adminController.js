@@ -1,3 +1,4 @@
+const AuditLog = require('../models/AuditLog');
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const Ladder = require('../models/Ladder');
@@ -180,6 +181,18 @@ async function getAdminStats(req, res) {
 }
 
 async function deleteUser(req, res) {
+  const targetUser = await User.findOne({ username: req.params.username });
+  if (targetUser) {
+    await AuditLog.create({
+      action: "DELETE_USER",
+      adminId: req.user.id,
+      adminUsername: req.user.username,
+      targetType: "USER",
+      targetId: String(targetUser._id),
+      details: { username: targetUser.username, role: targetUser.role },
+      ip: req.ip
+    }).catch(err => console.warn("Failed to write audit log:", err.message));
+  }
   const user = await User.findOne({
     username: req.params.username
   }).select('_id username');

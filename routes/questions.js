@@ -96,6 +96,7 @@ router.delete(
 
 router.get(
   '/:questionId',
+  validateObjectId('questionId'),
   asyncHandler(getQuestion)
 );
 

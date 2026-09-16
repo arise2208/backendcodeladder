@@ -6,17 +6,46 @@ async function loadLadderAccess(req, res, next) {
   try {
     const ladderId = req.params.ladderId;
 
-    if (!ladderId || !mongoose.isValidObjectId(ladderId)) {
+    if (!ladderId) {
+      return res.status(400).json({ message: 'ladderId is required' });
+    }
+
+    // Support default/curated ladders (e.g. default-blind-75)
+    if (typeof ladderId === 'string' && ladderId.startsWith('default-')) {
+      req.isDefaultLadder = true;
+      req.ladder = {
+        _id: ladderId,
+        title: ladderId === 'default-blind-75' ? 'Blind 75 Essentials' : ladderId,
+        isPublic: true
+      };
+      req.ladderAccess = {
+        isOwner: false,
+        role: 'READ',
+        isPublicViewer: true
+      };
+      return next();
+    }
+
+    if (!mongoose.isValidObjectId(ladderId)) {
       return res.status(400).json({ message: 'Invalid ladderId' });
     }
 
-    const ladder = await Ladder.findById(ladderId);
+    const ladder = await Ladder.findById(ladderId).catch(() => null);
 
     if (!ladder) {
       return res.status(404).json({ message: 'Ladder not found' });
     }
 
     if (!req.user) {
+      if (ladder.isPublic) {
+        req.ladder = ladder;
+        req.ladderAccess = {
+          isOwner: false,
+          role: 'READ',
+          isPublicViewer: true
+        };
+        return next();
+      }
       return res.status(401).json({ message: 'Authentication required' });
     }
 
@@ -29,7 +58,7 @@ async function loadLadderAccess(req, res, next) {
     const membership = await LadderMember.findOne({
       ladderId: ladder._id,
       userId: req.user.id
-    }).select('role');
+    }).select('role').catch(() => null);
 
     if (!membership) {
       if (ladder.isPublic) {

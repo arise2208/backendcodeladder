@@ -17,14 +17,14 @@ async function getPublicProfile(req, res) {
     throw httpError(404, 'User not found');
   }
 
-  // 1. Fetch connected platform handles
+  
   const platformAccounts = await PlatformAccount.find({ userId: user._id }).lean();
   const accountsMap = {};
   for (const acc of platformAccounts) {
     accountsMap[acc.platform.toLowerCase()] = acc.handle;
   }
 
-  // 2. Fetch public ladders contributed to community
+  
   const publicLadders = await Ladder.find({ ownerId: user._id, isPublic: true })
     .sort({ publishedAt: -1, createdAt: -1 })
     .lean();
@@ -80,7 +80,9 @@ async function getPublicProfile(req, res) {
         solved: true,
         solvedAt: s.solvedAt || s.firstSolvedAt || s.createdAt,
         firstSolvedAt: s.firstSolvedAt || s.solvedAt || s.createdAt,
-        starred: s.starred || false
+        starred: s.starred || false,
+        verified: s.verified ?? false,
+        verificationMethod: s.verificationMethod || 'UNVERIFIED'
       }
     }));
 
@@ -124,6 +126,8 @@ async function getPublicProfile(req, res) {
     },
     stats: {
       solved: solvedQuestions.length,
+      verifiedSolved: solvedQuestions.filter(s => s.state?.verified).length,
+      unverifiedSolved: solvedQuestions.filter(s => !s.state?.verified).length,
       starred: starredCount,
       publicLaddersCount: contributedLadders.length,
       blogsCount: blogsFormatted.length,
@@ -147,8 +151,10 @@ async function getStats(req, res) {
     throw httpError(404, 'User not found');
   }
 
-  const [solved, starred, practised, publicLadders] = await Promise.all([
+  const [solved, verifiedSolved, unverifiedSolved, starred, practised, publicLadders] = await Promise.all([
     UserQuestionState.countDocuments({ userId: user._id, solved: true }),
+    UserQuestionState.countDocuments({ userId: user._id, solved: true, verified: true }),
+    UserQuestionState.countDocuments({ userId: user._id, solved: true, verified: false }),
     UserQuestionState.countDocuments({ userId: user._id, starred: true }),
     UserLadderQuestionPractice.countDocuments({ userId: user._id, practised: true }),
     Ladder.find({ ownerId: user._id, isPublic: true }).select('likes').lean()
@@ -160,6 +166,8 @@ async function getStats(req, res) {
     username: user.username,
     stats: {
       solved,
+      verifiedSolved,
+      unverifiedSolved,
       starred,
       practised,
       publicLaddersCount: publicLadders.length,

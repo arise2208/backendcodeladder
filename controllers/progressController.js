@@ -1,17 +1,21 @@
+const mongoose = require('mongoose');
+const questionCatalog = require('../services/questionCatalog');
 const UserQuestionState = require('../models/UserQuestionState');
 const Question = require('../models/Question');
 const httpError = require('../utils/httpError');
 
 async function getState(req, res) {
-  const question = await Question.findById(req.params.questionId).select('_id');
-
-  if (!question) {
-    throw httpError(404, 'Question not found');
+  const catalogQ = questionCatalog.getQuestionById(req.params.questionId);
+  if (!catalogQ) {
+    const question = await Question.findById(req.params.questionId).select('_id');
+    if (!question) {
+      throw httpError(404, 'Question not found');
+    }
   }
 
   const state = await UserQuestionState.findOne({
     userId: req.user.id,
-    questionId: question._id
+    questionId: req.params.questionId
   }).lean();
 
   res.json({
@@ -25,75 +29,17 @@ async function getState(req, res) {
 }
 
 async function solve(req, res) {
-  const question = await Question.findById(req.params.questionId).select('_id');
-
-  if (!question) {
-    throw httpError(404, 'Question not found');
-  }
-
-  const now = new Date();
-
-  const state = await UserQuestionState.findOneAndUpdate(
-    {
-      userId: req.user.id,
-      questionId: question._id
-    },
-    {
-      $set: {
-        solved: true,
-        solvedAt: now
-      },
-      $setOnInsert: {
-        firstSolvedAt: now
-      }
-    },
-    {
-      returnDocument: 'after',
-      upsert: true,
-      setDefaultsOnInsert: true
-    }
+  throw httpError(
+    501,
+    "Manual solve marking has been retired. Problem solve states are verified and synchronized automatically from your connected platform accounts (LeetCode, Codeforces, CodeChef)."
   );
-
-  res.json({ state });
 }
 
 async function unsolve(req, res) {
-  const cutoff = new Date(Date.now() - 2 * 60 * 1000);
-
-  const state = await UserQuestionState.findOneAndUpdate(
-    {
-      userId: req.user.id,
-      questionId: req.params.questionId,
-      solved: true,
-      solvedAt: { $gte: cutoff }
-    },
-    {
-      $set: {
-        solved: false,
-        solvedAt: null
-      }
-    },
-    { returnDocument: 'after' }
+  throw httpError(
+    501,
+    "Manual unsolve has been retired. Problem solve states are verified and synchronized automatically from your connected platform accounts (LeetCode, Codeforces, CodeChef)."
   );
-
-  if (!state) {
-    const current = await UserQuestionState.findOne({
-      userId: req.user.id,
-      questionId: req.params.questionId
-    }).select('solved solvedAt');
-
-    if (!current) {
-      throw httpError(404, 'No solve state exists for this question');
-    }
-
-    if (!current.solved) {
-      throw httpError(400, 'Question is not currently solved');
-    }
-
-    throw httpError(403, 'Solved status is locked and cannot be changed after 2 minutes');
-  }
-
-  res.json({ state });
 }
 
 async function setStar(req, res) {
@@ -143,49 +89,95 @@ async function removeStar(req, res) {
 }
 
 async function listSolved(req, res) {
-  const states = await UserQuestionState.find({
-    userId: req.user.id,
-    solved: true
-  }).select('questionId firstSolvedAt solvedAt').lean();
+  try {
+    const states = await UserQuestionState.find({
+      userId: req.user.id,
+      solved: true
+    }).select('questionId firstSolvedAt solvedAt').lean().catch(() => []);
 
-  const questionIds = states.map(item => item.questionId);
-  const questions = await Question.find({
-    _id: { $in: questionIds }
-  }).lean();
+    const questionIds = states.map(item => item.questionId);
+    const resolvedMap = new Map();
+    const missingFromCatalog = [];
 
-  const stateByQuestion = new Map(
-    states.map(state => [String(state.questionId), state])
-  );
+    for (const qid of questionIds) {
+      const q = questionCatalog.getQuestionById(qid);
+      if (q) {
+        resolvedMap.set(String(qid), q);
+      } else {
+        missingFromCatalog.push(qid);
+      }
+    }
 
-  res.json({
-    questions: questions.map(question => ({
-      ...question,
-      state: stateByQuestion.get(String(question._id))
-    }))
-  });
+    if (missingFromCatalog.length > 0) {
+      const validIds = missingFromCatalog.filter(id => mongoose.isValidObjectId(id));
+      if (validIds.length > 0) {
+        const mongoQuestions = await Question.find({ _id: { $in: validIds } }).lean().catch(() => []);
+        mongoQuestions.forEach(q => resolvedMap.set(String(q._id), q));
+      }
+    }
+
+    const stateByQuestion = new Map(
+      states.map(state => [String(state.questionId), state])
+    );
+
+    const questions = questionIds.map(qid => resolvedMap.get(String(qid))).filter(Boolean);
+
+    res.json({
+      questions: questions.map(question => ({
+        ...question,
+        state: stateByQuestion.get(String(question._id)) || { solved: true }
+      }))
+    });
+  } catch (err) {
+    console.error('Error in listSolved:', err);
+    res.json({ questions: [] });
+  }
 }
 
 async function listStarred(req, res) {
-  const states = await UserQuestionState.find({
-    userId: req.user.id,
-    starred: true
-  }).select('questionId solved firstSolvedAt solvedAt starred').lean();
+  try {
+    const states = await UserQuestionState.find({
+      userId: req.user.id,
+      starred: true
+    }).select('questionId solved firstSolvedAt solvedAt starred').lean().catch(() => []);
 
-  const questionIds = states.map(item => item.questionId);
-  const questions = await Question.find({
-    _id: { $in: questionIds }
-  }).lean();
+    const questionIds = states.map(item => item.questionId);
+    const resolvedMap = new Map();
+    const missingFromCatalog = [];
 
-  const stateByQuestion = new Map(
-    states.map(state => [String(state.questionId), state])
-  );
+    for (const qid of questionIds) {
+      const q = questionCatalog.getQuestionById(qid);
+      if (q) {
+        resolvedMap.set(String(qid), q);
+      } else {
+        missingFromCatalog.push(qid);
+      }
+    }
 
-  res.json({
-    questions: questions.map(question => ({
-      ...question,
-      state: stateByQuestion.get(String(question._id))
-    }))
-  });
+    if (missingFromCatalog.length > 0) {
+      const validIds = missingFromCatalog.filter(id => mongoose.isValidObjectId(id));
+      if (validIds.length > 0) {
+        const mongoQuestions = await Question.find({ _id: { $in: validIds } }).lean().catch(() => []);
+        mongoQuestions.forEach(q => resolvedMap.set(String(q._id), q));
+      }
+    }
+
+    const stateByQuestion = new Map(
+      states.map(state => [String(state.questionId), state])
+    );
+
+    const questions = questionIds.map(qid => resolvedMap.get(String(qid))).filter(Boolean);
+
+    res.json({
+      questions: questions.map(question => ({
+        ...question,
+        state: stateByQuestion.get(String(question._id)) || { starred: true }
+      }))
+    });
+  } catch (err) {
+    console.error('Error in listStarred:', err);
+    res.json({ questions: [] });
+  }
 }
 
 module.exports = {

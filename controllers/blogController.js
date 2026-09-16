@@ -1,3 +1,12 @@
+function sanitizeInput(text) {
+  if (typeof text !== "string") return "";
+  return text
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+    .replace(/\bon\w+\s*=\s*(['"]).*?\1/gi, "")
+    .replace(/\bon\w+\s*=[^\s>]+/gi, "")
+    .replace(/javascript:[^\s"'>]*/gi, "");
+}
+
 const Blog = require('../models/Blog');
 const httpError = require('../utils/httpError');
 const mongoose = require('mongoose');

@@ -4,14 +4,9 @@ const User = require('../models/User');
 async function auth(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
-    const headerUsername = req.headers['x-username'];
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ message: 'Authentication required' });
-    }
-
-    if (!headerUsername || typeof headerUsername !== 'string') {
-      return res.status(401).json({ message: 'X-Username header is required' });
     }
 
     const token = authHeader.slice(7).trim();
@@ -38,28 +33,30 @@ async function auth(req, res, next) {
       return res.status(401).json({ message: 'Invalid authentication token' });
     }
 
-    if (payload.username !== headerUsername) {
-      return res.status(401).json({ message: 'Authenticated username does not match X-Username' });
+    let user;
+    try {
+      user = await User.findOne({ username: payload.username })
+        .select('_id username role tokenVersion');
+    } catch (dbErr) {
+      console.warn('Database error in auth middleware:', dbErr.message);
+      return res.status(503).json({ message: 'Authentication service temporarily unavailable' });
     }
-
-    const user = await User.findOne({ username: payload.username })
-      .select('_id username role');
 
     if (!user) {
       return res.status(401).json({ message: 'User associated with token no longer exists' });
     }
 
-    const effectiveRole =
-      user.role === 'ADMIN' ||
-      user.username?.toLowerCase() === 'deepanshu' ||
-      user.username?.toLowerCase() === 'admin'
-        ? 'ADMIN'
-        : user.role;
+    // JWT Revocation check (tokenVersion)
+    if (payload.tokenVersion !== undefined && user.tokenVersion !== undefined) {
+      if (payload.tokenVersion !== user.tokenVersion) {
+        return res.status(401).json({ message: 'Token has been revoked. Please log in again.' });
+      }
+    }
 
     req.user = {
       id: user._id,
       username: user.username,
-      role: effectiveRole
+      role: user.role
     };
 
     next();
@@ -68,4 +65,51 @@ async function auth(req, res, next) {
   }
 }
 
+async function optionalAuth(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.slice(7).trim();
+      if (token && process.env.JWT_SECRET) {
+        let payload;
+        try {
+          payload = jwt.verify(token, process.env.JWT_SECRET);
+        } catch {
+          return next();
+        }
+
+        if (payload && payload.username) {
+          try {
+            const user = await User.findOne({ username: payload.username })
+              .select('_id username role tokenVersion')
+              .lean();
+
+            if (user) {
+              if (payload.tokenVersion !== undefined && user.tokenVersion !== undefined) {
+                if (payload.tokenVersion !== user.tokenVersion) {
+                  return next();
+                }
+              }
+
+              req.user = {
+                id: user._id,
+                username: user.username,
+                role: user.role
+              };
+            }
+          } catch {
+            // Non-blocking for optional auth
+          }
+        }
+      }
+    }
+  } catch {
+    // Non-blocking for optional auth
+  }
+  next();
+}
+
 module.exports = auth;
+module.exports.auth = auth;
+module.exports.optionalAuth = optionalAuth;

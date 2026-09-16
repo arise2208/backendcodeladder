@@ -22,6 +22,20 @@ const platformAccountSchema = new mongoose.Schema(
       type: Boolean,
       default: false
     },
+    verifiedAt: {
+      type: Date,
+      default: null
+    },
+    verificationChallenge: {
+      problemSlug: { type: String, default: null },
+      problemTitle: { type: String, default: null },
+      expectedStatus: { type: String, default: 'Accepted' },
+      verificationCode: { type: String, default: null },
+      language: { type: String, default: 'python3' },
+      code: { type: String, default: null },
+      startedAt: { type: Date, default: null },
+      expiresAt: { type: Date, default: null }
+    },
     lastSyncedAt: {
       type: Date,
       default: null

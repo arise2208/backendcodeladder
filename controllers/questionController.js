@@ -1,3 +1,4 @@
+const questionCatalog = require('../services/questionCatalog');
 const mongoose = require('mongoose');
 const Question = require('../models/Question');
 const UserQuestionState = require('../models/UserQuestionState');
@@ -6,71 +7,98 @@ const UserLadderQuestionPractice = require('../models/UserLadderQuestionPractice
 const httpError = require('../utils/httpError');
 
 async function listQuestions(req, res) {
-  const filter = {};
+  try {
+    const filters = {
+      platform: typeof req.query.platform === 'string' ? req.query.platform : undefined,
+      difficulty: typeof req.query.difficulty === 'string' ? req.query.difficulty : undefined,
+      tag: typeof req.query.tag === 'string' ? req.query.tag : undefined,
+      minRating: req.query.minRating,
+      maxRating: req.query.maxRating,
+      search: typeof req.query.search === 'string' ? req.query.search : undefined
+    };
 
-  if (req.query.platform && ['LEETCODE', 'CODEFORCES', 'CODECHEF', 'ATCODER'].includes(req.query.platform.toUpperCase())) {
-    filter.platform = req.query.platform.toUpperCase();
-  }
-  if (req.query.difficulty && ['EASY', 'MEDIUM', 'HARD'].includes(req.query.difficulty.toUpperCase())) {
-    filter.difficulty = req.query.difficulty.toUpperCase();
-  }
-  if (req.query.tag && typeof req.query.tag === 'string' && req.query.tag.trim() && req.query.tag.trim() !== 'ALL') {
-    const rawTag = req.query.tag.trim();
-    filter.tags = { $regex: new RegExp(`^${rawTag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
-  }
+    const page = req.query.page || 1;
+    const limit = req.query.limit || 20;
 
-  if (req.query.minRating || req.query.maxRating) {
-    filter['metadata.rating'] = {};
-    if (req.query.minRating) {
-      const min = Number.parseInt(req.query.minRating, 10);
-      if (!Number.isNaN(min)) filter['metadata.rating'].$gte = min;
+    let result = null;
+    if (questionCatalog.isLoaded) {
+      result = questionCatalog.getPaginatedQuestions(filters, page, limit);
     }
-    if (req.query.maxRating) {
-      const max = Number.parseInt(req.query.maxRating, 10);
-      if (!Number.isNaN(max)) filter['metadata.rating'].$lte = max;
+
+    if (result && Array.isArray(result.questions) && (result.questions.length > 0 || (result.pagination && result.pagination.total !== undefined))) {
+      return res.json(result);
     }
-  }
 
-  if (req.query.search && typeof req.query.search === 'string' && req.query.search.trim()) {
-    const escaped = req.query.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    filter.$or = [
-      { title: { $regex: escaped, $options: 'i' } },
-      { externalId: { $regex: escaped, $options: 'i' } },
-      { tags: { $regex: escaped, $options: 'i' } }
-    ];
-  }
-
-  const page = Math.max(Number.parseInt(req.query.page || '1', 10), 1);
-  const limit = Math.min(Math.max(Number.parseInt(req.query.limit || '50', 10), 1), 100);
-
-  const [questions, total] = await Promise.all([
-    Question.find(filter)
-      .sort({ _id: 1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .lean(),
-    Question.countDocuments(filter)
-  ]);
-
-  res.json({
-    questions,
-    pagination: {
-      page,
-      limit,
-      total,
-      pages: Math.ceil(total / limit)
+    // Fallback if catalog is empty or not loaded
+    const query = {};
+    if (filters.platform && filters.platform !== 'ALL') query.platform = filters.platform.toUpperCase();
+    if (filters.difficulty && filters.difficulty !== 'ALL') query.difficulty = filters.difficulty.toUpperCase();
+    if (filters.tag && filters.tag !== 'ALL') query.tags = filters.tag;
+    if (filters.minRating || filters.maxRating) {
+      query.rating = {};
+      if (filters.minRating) query.rating.$gte = Number(filters.minRating);
+      if (filters.maxRating) query.rating.$lte = Number(filters.maxRating);
     }
-  });
+    if (filters.search) {
+      query.$or = [
+        { title: { $regex: filters.search.slice(0, 100), $options: 'i' } },
+        { externalId: { $regex: filters.search.slice(0, 100), $options: 'i' } }
+      ];
+    }
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 50);
+
+    const [total, questions] = await Promise.all([
+      Question.countDocuments(query).catch(() => 0),
+      Question.find(query).skip((pageNum - 1) * limitNum).limit(limitNum).lean().catch(() => [])
+    ]);
+
+    const pages = Math.ceil(total / limitNum) || 1;
+    res.json({
+      questions: questions || [],
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: total || (questions ? questions.length : 0),
+        pages,
+        totalPages: pages
+      }
+    });
+  } catch (err) {
+    console.error('Error in listQuestions:', err);
+    res.json({
+      questions: [],
+      pagination: {
+        page: 1,
+        limit: 20,
+        total: 0,
+        pages: 1,
+        totalPages: 1
+      }
+    });
+  }
 }
 
 async function getQuestion(req, res) {
-  const question = await Question.findById(req.params.questionId).lean();
+  try {
+    const catalogQuestion = questionCatalog.getQuestionById(req.params.questionId);
+    if (catalogQuestion) {
+      return res.json({ question: catalogQuestion });
+    }
 
-  if (!question) {
+    if (mongoose.isValidObjectId(req.params.questionId)) {
+      const question = await Question.findById(req.params.questionId).lean().catch(() => null);
+      if (question) {
+        return res.json({ question });
+      }
+    }
+
+    throw httpError(404, 'Question not found');
+  } catch (err) {
+    if (err.statusCode) throw err;
     throw httpError(404, 'Question not found');
   }
-
-  res.json({ question });
 }
 
 async function createQuestion(req, res) {
@@ -79,7 +107,7 @@ async function createQuestion(req, res) {
 }
 
 async function updateQuestion(req, res) {
-  const allowed = ['platform', 'externalId', 'title', 'url', 'tags', 'difficulty', 'metadata'];
+  const allowed = ['platform', 'externalId', 'title', 'url', 'tags', 'difficulty', 'rating', 'metadata'];
   const update = {};
 
   for (const key of allowed) {
@@ -141,7 +169,7 @@ async function importBulkQuestions(req, res) {
   }
 
   const validPlatforms = ['LEETCODE', 'CODEFORCES', 'CODECHEF', 'ATCODER'];
-  const validDifficulties = ['EASY', 'MEDIUM', 'HARD'];
+  const validDifficulties = ['EASY', 'MEDIUM', 'HARD', 'N/A'];
 
   const bulkOps = [];
   const errors = [];
@@ -199,13 +227,19 @@ async function importBulkQuestions(req, res) {
       }
     }
 
+    let rating = undefined;
+    if (item.rating !== undefined && item.rating !== '' && !isNaN(Number(item.rating))) {
+      rating = Number(item.rating);
+    }
+
     const questionDoc = {
       platform,
       externalId,
       title,
       url,
       tags,
-      ...(difficulty ? { difficulty } : {})
+      ...(difficulty ? { difficulty } : platform === 'LEETCODE' ? {} : { difficulty: 'N/A' }),
+      ...(rating !== undefined ? { rating } : {})
     };
 
     bulkOps.push({
@@ -242,24 +276,7 @@ async function importBulkQuestions(req, res) {
 }
 
 async function getTags(req, res) {
-  const match = {};
-  if (req.query.platform && ['LEETCODE', 'CODEFORCES', 'CODECHEF', 'ATCODER'].includes(req.query.platform.toUpperCase())) {
-    match.platform = req.query.platform.toUpperCase();
-  }
-  const tagCounts = await Question.aggregate([
-    ...(Object.keys(match).length > 0 ? [{ $match: match }] : []),
-    { $unwind: '$tags' },
-    { $group: { _id: '$tags', count: { $sum: 1 } } },
-    { $sort: { count: -1 } }
-  ]);
-
-  const tags = tagCounts
-    .filter(item => item._id && !String(item._id).startsWith('*'))
-    .map(item => ({
-      name: String(item._id).trim(),
-      count: item.count
-    }));
-
+  const tags = questionCatalog.getTags(req.query.platform);
   res.json({ tags });
 }
 

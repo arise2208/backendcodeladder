@@ -260,10 +260,13 @@ describe('CodeLadder API', () => {
 
       expect(res.statusCode).toBe(200);
 
-      expect(res.body).toEqual({
+      expect(res.body).toEqual(expect.objectContaining({
         ok: true,
-        service: 'codeladder-api'
-      });
+        service: 'codeladder-api',
+        database: expect.objectContaining({
+          connected: true
+        })
+      }));
     });
 
   });
@@ -297,6 +300,7 @@ describe('CodeLadder API', () => {
 
       expect(res.body.user)
         .toEqual({
+          id: expect.any(String),
           username: user.username,
           role: 'USER'
         });
@@ -382,6 +386,7 @@ describe('CodeLadder API', () => {
 
       expect(res.body.user)
         .toEqual({
+          id: expect.any(String),
           username: users.owner.username,
           role: 'USER'
         });
@@ -397,18 +402,44 @@ describe('CodeLadder API', () => {
     });
 
 
-    test('GET /api/auth/me rejects mismatched X-Username', async () => {
-
+    test('GET /api/auth/me succeeds with only Bearer token and no X-Username', async () => {
       const res = await request(app)
         .get('/api/auth/me')
-        .set(
-          auth(
-            ownerToken,
-            users.read.username
-          )
-        );
+        .set({ Authorization: `Bearer ${ownerToken}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.user.username).toBe(users.owner.username);
+    });
 
-      expect(res.statusCode).toBe(401);
+    test('Registration with username deepanshu does not auto-elevate to ADMIN', async () => {
+      const normalUser = {
+        username: `deepanshu_${suffix}`,
+        email: `deepanshu_${suffix}@example.com`,
+        password: 'TestPassword123!'
+      };
+      const res = await request(app).post('/api/auth/register').send(normalUser);
+      expect(res.statusCode).toBe(201);
+      expect(res.body.user.role).toBe('USER');
+      await User.deleteOne({ username: normalUser.username });
+    });
+
+    test('POST /api/auth/logout-all invalidates previous JWT token', async () => {
+      const resLogout = await request(app)
+        .post('/api/auth/logout-all')
+        .set({ Authorization: `Bearer ${ownerToken}` });
+      expect(resLogout.statusCode).toBe(200);
+      expect(resLogout.body.message).toBe('All sessions successfully revoked');
+
+      const resCheck = await request(app)
+        .get('/api/auth/me')
+        .set({ Authorization: `Bearer ${ownerToken}` });
+      expect(resCheck.statusCode).toBe(401);
+
+      // Re-login to get fresh valid token for subsequent tests
+      const resLogin = await request(app)
+        .post('/api/auth/login')
+        .send({ username: users.owner.username, password: users.owner.password });
+      expect(resLogin.statusCode).toBe(200);
+      ownerToken = resLogin.body.token;
     });
 
   });
@@ -649,109 +680,45 @@ describe('CodeLadder API', () => {
     });
 
 
-    test('POST solve question', async () => {
-
+    test('POST solve question returns 501 Not Implemented', async () => {
       const res = await request(app)
-        .post(
-          `/api/questions/${question1._id}/solve`
-        )
-        .set(
-          auth(
-            ownerToken,
-            users.owner.username
-          )
-        );
-
-      expect(res.statusCode).toBe(200);
-
-      expect(res.body.state.solved)
-        .toBe(true);
-
-      expect(res.body.state.firstSolvedAt)
-        .toBeTruthy();
-
-      expect(res.body.state.solvedAt)
-        .toBeTruthy();
+        .post(`/api/questions/${question1._id}/solve`)
+        .set(auth(ownerToken, users.owner.username));
+      expect(res.statusCode).toBe(501);
+      expect(res.body.error).toMatch(/retired/i);
     });
 
-
-    test('solve again preserves firstSolvedAt', async () => {
-
-      const user = await User.findOne({
-        username: users.owner.username
-      });
-
-      const before =
-        await UserQuestionState.findOne({
-          userId: user._id,
-          questionId: question1._id
-        }).lean();
-
+    test('POST unsolve question returns 501 Not Implemented', async () => {
       const res = await request(app)
-        .post(
-          `/api/questions/${question1._id}/solve`
-        )
-        .set(
-          auth(
-            ownerToken,
-            users.owner.username
-          )
-        );
-
-      expect(res.statusCode).toBe(200);
-
-      expect(
-        new Date(
-          res.body.state.firstSolvedAt
-        ).getTime()
-      ).toBe(
-        new Date(
-          before.firstSolvedAt
-        ).getTime()
-      );
+        .post(`/api/questions/${question1._id}/unsolve`)
+        .set(auth(ownerToken, users.owner.username));
+      expect(res.statusCode).toBe(501);
+      expect(res.body.error).toMatch(/retired/i);
     });
 
+    test('POST /api/platform-accounts/sync-solved marks question solved and tracks unverified status', async () => {
+      // Test payload cap rejection (> 2000)
+      const oversized = Array.from({ length: 2001 }, (_, i) => `problem-${i}`);
+      const resOversized = await request(app)
+        .post('/api/platform-accounts/sync-solved')
+        .set(auth(ownerToken, users.owner.username))
+        .send({ codeforces: oversized });
+      expect(resOversized.statusCode).toBe(400);
 
-    test('unsolve works within two minutes', async () => {
+      // Sync question1
+      const resSync = await request(app)
+        .post('/api/platform-accounts/sync-solved')
+        .set(auth(ownerToken, users.owner.username))
+        .send({ codeforces: [question1.externalId] });
+      expect(resSync.statusCode).toBe(200);
+      expect(resSync.body.unverifiedCount).toBeGreaterThanOrEqual(1);
 
-      const res = await request(app)
-        .post(
-          `/api/questions/${question1._id}/unsolve`
-        )
-        .set(
-          auth(
-            ownerToken,
-            users.owner.username
-          )
-        );
-
-      expect(res.statusCode).toBe(200);
-
-      expect(res.body.state.solved)
-        .toBe(false);
-
-      expect(res.body.state.solvedAt)
-        .toBeNull();
-
-      expect(res.body.state.firstSolvedAt)
-        .toBeTruthy();
-    });
-
-
-    test('unsolve rejects question that is not solved', async () => {
-
-      const res = await request(app)
-        .post(
-          `/api/questions/${question1._id}/unsolve`
-        )
-        .set(
-          auth(
-            ownerToken,
-            users.owner.username
-          )
-        );
-
-      expect(res.statusCode).toBe(400);
+      // Verify solve state in DB
+      const user = await User.findOne({ username: users.owner.username });
+      const state = await UserQuestionState.findOne({ userId: user._id, questionId: question1._id });
+      expect(state).toBeTruthy();
+      expect(state.solved).toBe(true);
+      expect(state.verified).toBe(false);
     });
 
 
@@ -1862,6 +1829,55 @@ describe('CodeLadder API', () => {
           title: 'Unauthorized',
           url: 'https://example.com'
         });
+
+    test('POST /api/ladders/:ladderId/transfer-ownership transfers ownership', async () => {
+      const resTransfer = await request(app)
+        .post(`/api/ladders/${ladderId}/transfer-ownership`)
+        .set(auth(ownerToken, users.owner.username))
+        .send({ newOwnerUsername: users.write.username });
+      expect(resTransfer.statusCode).toBe(200);
+      expect(resTransfer.body.ladder.ownerUsername).toBe(users.write.username);
+
+      // Transferred owner can update
+      const resUpdate = await request(app)
+        .put(`/api/ladders/${ladderId}`)
+        .set(auth(writeToken, users.write.username))
+        .send({ title: 'Transferred Ladder Title' });
+      expect(resUpdate.statusCode).toBe(200);
+
+      // Transfer back to original owner
+      const resBack = await request(app)
+        .post(`/api/ladders/${ladderId}/transfer-ownership`)
+        .set(auth(writeToken, users.write.username))
+        .send({ newOwnerUsername: users.owner.username });
+      expect(resBack.statusCode).toBe(200);
+    });
+
+    test('Blog creation and comments sanitize malicious XSS payloads', async () => {
+      const resBlog = await request(app)
+        .post('/api/blogs')
+        .set(auth(ownerToken, users.owner.username))
+        .send({
+          title: 'Clean Title <script>alert("xss")</script>',
+          content: 'Blog Content <img src=x onerror=alert(1)> and <script>evil()</script>'
+        });
+      expect(resBlog.statusCode).toBe(201);
+      expect(resBlog.body.blog.title).not.toContain('<script>');
+      expect(resBlog.body.blog.content).not.toContain('<script>');
+      expect(resBlog.body.blog.content).not.toContain('onerror=');
+
+      const blogId = resBlog.body.blog._id;
+      const resComment = await request(app)
+        .post(`/api/blogs/${blogId}/comments`)
+        .set(auth(ownerToken, users.owner.username))
+        .send({ content: 'Comment <script>steal()</script>' });
+      expect(resComment.statusCode).toBe(201);
+      const comments = resComment.body.comments;
+      expect(comments[comments.length - 1].content).not.toContain('<script>');
+
+      await request(app).delete(`/api/blogs/${blogId}`).set(auth(ownerToken, users.owner.username));
+    });
+
 
       expect(res.statusCode).toBe(401);
     });

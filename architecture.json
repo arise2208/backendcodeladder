@@ -1,0 +1,726 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "project": {
+    "name": "backendcodeladder",
+    "version": "1.0.0",
+    "description": "CodeLadder Competitive Programming Platform REST API and Intelligence Service",
+    "runtime": "Node.js 18+",
+    "language": "JavaScript (CommonJS)",
+    "framework": "Express 5.2.1",
+    "database": "MongoDB 6.0+ via Mongoose 9.9.5",
+    "rootPath": "/Users/dep/Desktop/backendcodeladder"
+  },
+  "features": [
+    {
+      "id": "auth",
+      "name": "Authentication & Identity Management",
+      "purpose": "Issues and verifies JWT session tokens with dual-header validation (Bearer token + X-Username).",
+      "entryPoints": [
+        "POST /api/auth/register",
+        "POST /api/auth/login",
+        "GET /api/auth/me"
+      ],
+      "files": [
+        "routes/auth.js",
+        "controllers/authController.js",
+        "middleware/auth.js",
+        "models/User.js"
+      ],
+      "keyFunctions": [
+        "register",
+        "login",
+        "me",
+        "signToken",
+        "auth",
+        "optionalAuth"
+      ],
+      "externalDependencies": [
+        "bcrypt@^6.0.0",
+        "jsonwebtoken@^9.0.3",
+        "express@^5.2.1"
+      ],
+      "internalDependencies": [
+        "models/User.js",
+        "utils/httpError.js",
+        "utils/asyncHandler.js"
+      ],
+      "dataAccess": {
+        "reads": [
+          "users"
+        ],
+        "writes": [
+          "users"
+        ]
+      },
+      "knownEdgeCases": [
+        "Dual-header matching: Token payload username must match X-Username header.",
+        "Automatic admin promotion for usernames deepanshu and admin.",
+        "Test suite in tests/api.test.js expects user without id property."
+      ]
+    },
+    {
+      "id": "questionCatalog",
+      "name": "In-Memory Question Catalog & Problem Search",
+      "purpose": "Provides sub-millisecond filtering, pagination, and tag taxonomy normalization across 22,000+ CP questions.",
+      "entryPoints": [
+        "GET /api/questions",
+        "GET /api/questions/tags",
+        "GET /api/questions/:questionId",
+        "POST /api/questions",
+        "POST /api/questions/bulk",
+        "PUT /api/questions/:questionId",
+        "DELETE /api/questions/:questionId"
+      ],
+      "files": [
+        "services/questionCatalog.js",
+        "routes/questions.js",
+        "controllers/questionController.js",
+        "middleware/validateObjectId.js",
+        "models/Question.js"
+      ],
+      "keyFunctions": [
+        "QuestionCatalog.getPaginatedQuestions",
+        "QuestionCatalog.getTags",
+        "QuestionCatalog.getQuestionById",
+        "QuestionCatalog.getQuestionByPlatformAndExternalId",
+        "listQuestions",
+        "getTags",
+        "getQuestion",
+        "createQuestion",
+        "updateQuestion",
+        "deleteQuestion",
+        "importBulkQuestions"
+      ],
+      "externalDependencies": [
+        "mongoose@^9.9.5"
+      ],
+      "internalDependencies": [
+        "models/Question.js",
+        "services/questionCatalog.js",
+        "utils/httpError.js",
+        "utils/asyncHandler.js"
+      ],
+      "dataAccess": {
+        "reads": [
+          "data/questions.json",
+          "questions"
+        ],
+        "writes": [
+          "questions"
+        ]
+      },
+      "knownEdgeCases": [
+        "Junk tags are filtered out using isJunkTag regex; tag aliases are mapped canonically (e.g. dynamic programming -> dp).",
+        "Non-ObjectId slugs are resolved dynamically to ObjectIds in middleware/validateObjectId.js."
+      ]
+    },
+    {
+      "id": "userProgress",
+      "name": "User Progress & Global Question State",
+      "purpose": "Tracks global solve timestamps, first solve dates, and starred bookmarks per user across platforms.",
+      "entryPoints": [
+        "GET /api/questions/:questionId/state",
+        "POST /api/questions/:questionId/solve",
+        "POST /api/questions/:questionId/unsolve",
+        "PUT /api/questions/:questionId/star",
+        "DELETE /api/questions/:questionId/star",
+        "GET /api/me/questions/solved",
+        "GET /api/me/questions/starred"
+      ],
+      "files": [
+        "controllers/progressController.js",
+        "routes/questions.js",
+        "routes/me.js",
+        "models/UserQuestionState.js"
+      ],
+      "keyFunctions": [
+        "getState",
+        "solve",
+        "unsolve",
+        "setStar",
+        "removeStar",
+        "listSolved",
+        "listStarred"
+      ],
+      "externalDependencies": [
+        "mongoose@^9.9.5"
+      ],
+      "internalDependencies": [
+        "models/UserQuestionState.js",
+        "models/Question.js",
+        "services/questionCatalog.js",
+        "utils/httpError.js"
+      ],
+      "dataAccess": {
+        "reads": [
+          "userquestionstates",
+          "questions"
+        ],
+        "writes": [
+          "userquestionstates"
+        ]
+      },
+      "knownEdgeCases": [
+        "solve() and unsolve() currently throw HTTP 403 because manual solving was locked in favor of account sync.",
+        "2-minute freeze rule logic limits manual unsolve requests to within 120s of initial solve."
+      ]
+    },
+    {
+      "id": "ladders",
+      "name": "Ladders & Curated Practice Sheets",
+      "purpose": "Creates, organizes, reorders, publishes, and discovers problem ladders, including default sheets (Blind 75, NeetCode 150, CP-31, CF Div 2).",
+      "entryPoints": [
+        "GET /api/ladders",
+        "POST /api/ladders",
+        "GET /api/ladders/marketplace",
+        "GET /api/ladders/:ladderId",
+        "PUT /api/ladders/:ladderId",
+        "DELETE /api/ladders/:ladderId",
+        "POST /api/ladders/:ladderId/questions",
+        "PUT /api/ladders/:ladderId/questions/reorder",
+        "DELETE /api/ladders/:ladderId/questions/:questionId",
+        "POST /api/ladders/:ladderId/publish",
+        "POST /api/ladders/:ladderId/vote"
+      ],
+      "files": [
+        "routes/ladders.js",
+        "controllers/ladderController.js",
+        "services/defaultLadders.js",
+        "middleware/ladderAccess.js",
+        "models/Ladder.js",
+        "models/LadderQuestion.js",
+        "models/LadderMember.js"
+      ],
+      "keyFunctions": [
+        "createLadder",
+        "listLadders",
+        "getLadder",
+        "updateLadder",
+        "deleteLadder",
+        "addQuestion",
+        "removeQuestion",
+        "reorderQuestions",
+        "publishLadder",
+        "listMarketplaceLadders",
+        "voteLadder",
+        "getDefaultLadder",
+        "getDefaultMarketplaceLadders"
+      ],
+      "externalDependencies": [
+        "mongoose@^9.9.5"
+      ],
+      "internalDependencies": [
+        "models/Ladder.js",
+        "models/LadderQuestion.js",
+        "models/LadderMember.js",
+        "services/questionCatalog.js",
+        "services/defaultLadders.js",
+        "utils/httpError.js"
+      ],
+      "dataAccess": {
+        "reads": [
+          "ladders",
+          "ladderquestions",
+          "laddermembers"
+        ],
+        "writes": [
+          "ladders",
+          "ladderquestions",
+          "laddermembers"
+        ]
+      },
+      "knownEdgeCases": [
+        "User quota: maximum 10 personal ladders per user.",
+        "Public quota: maximum 10 published ladders per user. Publishing is irreversible.",
+        "Default ladders (IDs starting with default-) resolve in-memory via services/defaultLadders.js."
+      ]
+    },
+    {
+      "id": "ladderPractice",
+      "name": "Ladder Practice & Revision Mode",
+      "purpose": "Tracks blind problem solving per ladder and calculates review queues for revision mode.",
+      "entryPoints": [
+        "GET /api/ladders/:ladderId/questions/:questionId/practice",
+        "POST /api/ladders/:ladderId/questions/:questionId/practise",
+        "DELETE /api/ladders/:ladderId/questions/:questionId/practise",
+        "POST /api/ladders/:ladderId/practise/clear",
+        "PUT /api/ladders/:ladderId/mode",
+        "GET /api/ladders/:ladderId/revision"
+      ],
+      "files": [
+        "controllers/ladderController.js",
+        "routes/ladders.js",
+        "models/UserLadderQuestionPractice.js",
+        "models/Ladder.js"
+      ],
+      "keyFunctions": [
+        "getPractice",
+        "practise",
+        "unpractise",
+        "clearPractice",
+        "setMode",
+        "getRevision"
+      ],
+      "externalDependencies": [
+        "mongoose@^9.9.5"
+      ],
+      "internalDependencies": [
+        "models/UserLadderQuestionPractice.js",
+        "models/Ladder.js",
+        "utils/httpError.js"
+      ],
+      "dataAccess": {
+        "reads": [
+          "userladderquestionpractices",
+          "ladders"
+        ],
+        "writes": [
+          "userladderquestionpractices",
+          "ladders"
+        ]
+      },
+      "knownEdgeCases": [
+        "Ladder mode enum is ['NORMAL', 'REVISION']. Revision questions are filtered by practiced state."
+      ]
+    },
+    {
+      "id": "ladderCollaboration",
+      "name": "Ladder Collaboration & Access Control",
+      "purpose": "Manages member invitations and permissions (READ vs WRITE) on private and team ladders.",
+      "entryPoints": [
+        "GET /api/ladders/:ladderId/members",
+        "POST /api/ladders/:ladderId/members",
+        "PUT /api/ladders/:ladderId/members/:username",
+        "DELETE /api/ladders/:ladderId/members/:username"
+      ],
+      "files": [
+        "routes/ladders.js",
+        "controllers/ladderController.js",
+        "middleware/ladderAccess.js",
+        "models/LadderMember.js"
+      ],
+      "keyFunctions": [
+        "listMembers",
+        "addMember",
+        "updateMember",
+        "removeMember",
+        "loadLadderAccess",
+        "requireLadderAccess",
+        "requireLadderWrite",
+        "requireLadderOwner"
+      ],
+      "externalDependencies": [
+        "mongoose@^9.9.5"
+      ],
+      "internalDependencies": [
+        "models/LadderMember.js",
+        "models/Ladder.js",
+        "models/User.js"
+      ],
+      "dataAccess": {
+        "reads": [
+          "laddermembers",
+          "ladders",
+          "users"
+        ],
+        "writes": [
+          "laddermembers"
+        ]
+      },
+      "knownEdgeCases": [
+        "Ladder owners cannot invite themselves. Roles are strictly READ or WRITE."
+      ]
+    },
+    {
+      "id": "communityBlogs",
+      "name": "Codeforces-Style Community Blogs & Comments",
+      "purpose": "Full-featured markdown blogs with LaTeX math formulas, code blocks, comment upvotes, and real-time recent actions.",
+      "entryPoints": [
+        "GET /api/blogs",
+        "GET /api/blogs/recent-actions",
+        "GET /api/blogs/me/quota",
+        "GET /api/blogs/:id",
+        "POST /api/blogs",
+        "PUT /api/blogs/:id",
+        "DELETE /api/blogs/:id",
+        "POST /api/blogs/:id/vote",
+        "POST /api/blogs/:id/comments",
+        "DELETE /api/blogs/:id/comments/:commentId",
+        "POST /api/blogs/:id/comments/:commentId/vote"
+      ],
+      "files": [
+        "routes/blogs.js",
+        "controllers/blogController.js",
+        "models/Blog.js"
+      ],
+      "keyFunctions": [
+        "listBlogs",
+        "getRecentActions",
+        "getBlog",
+        "createBlog",
+        "updateBlog",
+        "deleteBlog",
+        "voteBlog",
+        "addComment",
+        "deleteComment",
+        "voteComment",
+        "getUserBlogQuota",
+        "generateSnippet"
+      ],
+      "externalDependencies": [
+        "mongoose@^9.9.5"
+      ],
+      "internalDependencies": [
+        "models/Blog.js",
+        "models/User.js",
+        "utils/httpError.js"
+      ],
+      "dataAccess": {
+        "reads": [
+          "blogs",
+          "users"
+        ],
+        "writes": [
+          "blogs"
+        ]
+      },
+      "knownEdgeCases": [
+        "Quota: maximum 5 blogs per user.",
+        "Content size limit: 50,000 characters per blog; 5,000 per comment.",
+        "Voting toggles off on secondary click and enforces 2-minute freeze rule."
+      ]
+    },
+    {
+      "id": "platformAccounts",
+      "name": "Platform Account Integration & Solve Synchronization",
+      "purpose": "Links external CP handles (LeetCode, Codeforces, CodeChef, AtCoder), verifies handles, and bulk syncs solve history.",
+      "entryPoints": [
+        "GET /api/platform-accounts",
+        "PUT /api/platform-accounts/:platform",
+        "DELETE /api/platform-accounts/:platform",
+        "POST /api/platform-accounts/sync-solved",
+        "POST /api/platform-accounts/leetcode/challenge/start",
+        "POST /api/platform-accounts/leetcode/challenge/verify",
+        "POST /api/platform-accounts/leetcode/submission",
+        "POST /api/platform-accounts/leetcode/sync"
+      ],
+      "files": [
+        "routes/platformAccounts.js",
+        "controllers/platformAccountController.js",
+        "models/PlatformAccount.js"
+      ],
+      "keyFunctions": [
+        "listAccounts",
+        "upsertAccount",
+        "deleteAccount",
+        "syncSolvedProblems",
+        "startLeetCodeChallenge",
+        "verifyLeetCodeChallenge",
+        "recordSingleSubmission",
+        "syncLeetCodeHistory"
+      ],
+      "externalDependencies": [
+        "mongoose@^9.9.5"
+      ],
+      "internalDependencies": [
+        "models/PlatformAccount.js",
+        "models/UserQuestionState.js",
+        "models/Question.js",
+        "services/questionCatalog.js",
+        "utils/httpError.js"
+      ],
+      "dataAccess": {
+        "reads": [
+          "platformaccounts",
+          "userquestionstates",
+          "questions"
+        ],
+        "writes": [
+          "platformaccounts",
+          "userquestionstates"
+        ]
+      },
+      "knownEdgeCases": [
+        "syncSolvedProblems accepts bulk arrays up to 10MB JSON payloads.",
+        "LeetCode challenge generates a random verification code that must be submitted to LeetCode."
+      ]
+    },
+    {
+      "id": "contests",
+      "name": "Multi-Platform Contest Upsolving",
+      "purpose": "Provides contest directories and problem specifications across Codeforces, LeetCode, and CodeChef.",
+      "entryPoints": [
+        "GET /api/contests",
+        "GET /api/contests/:contestId"
+      ],
+      "files": [
+        "routes/contests.js",
+        "controllers/contestController.js",
+        "models/Contest.js"
+      ],
+      "keyFunctions": [
+        "listContests",
+        "getContest"
+      ],
+      "externalDependencies": [
+        "mongoose@^9.9.5"
+      ],
+      "internalDependencies": [
+        "models/Contest.js",
+        "models/Question.js",
+        "utils/httpError.js"
+      ],
+      "dataAccess": {
+        "reads": [
+          "contests"
+        ],
+        "writes": [
+          "contests"
+        ]
+      },
+      "knownEdgeCases": [
+        "Platform and category fields are unconstrained uppercase strings (no enum) to accommodate new contest formats.",
+        "Contest problems link to Question collection via questionId when matched."
+      ]
+    },
+    {
+      "id": "userProfiles",
+      "name": "Public User Profiles & Heatmap Statistics",
+      "purpose": "Aggregates annual solve heatmaps, contributed public ladders, blogs, and total community upvotes for public profiles.",
+      "entryPoints": [
+        "GET /api/users/:username",
+        "GET /api/users/:username/stats"
+      ],
+      "files": [
+        "routes/users.js",
+        "controllers/userController.js"
+      ],
+      "keyFunctions": [
+        "getPublicProfile",
+        "getStats"
+      ],
+      "externalDependencies": [
+        "mongoose@^9.9.5"
+      ],
+      "internalDependencies": [
+        "models/User.js",
+        "models/UserQuestionState.js",
+        "models/Ladder.js",
+        "models/Blog.js",
+        "models/PlatformAccount.js"
+      ],
+      "dataAccess": {
+        "reads": [
+          "users",
+          "userquestionstates",
+          "ladders",
+          "blogs",
+          "platformaccounts"
+        ],
+        "writes": []
+      },
+      "knownEdgeCases": [
+        "Calculates grand total upvotes by summing ladder likes and blog upvotes."
+      ]
+    },
+    {
+      "id": "admin",
+      "name": "Administrative Operations",
+      "purpose": "Restricted administration dashboard for user account management, password resets, ladder moderation, and bulk problem seeding.",
+      "entryPoints": [
+        "GET /api/admin/stats",
+        "GET /api/admin/users",
+        "GET /api/admin/users/:username",
+        "PATCH /api/admin/users/:username/role",
+        "POST /api/admin/users/:username/reset-password",
+        "DELETE /api/admin/users/:username",
+        "GET /api/admin/ladders",
+        "DELETE /api/admin/ladders/:ladderId"
+      ],
+      "files": [
+        "routes/admin.js",
+        "controllers/adminController.js",
+        "middleware/admin.js"
+      ],
+      "keyFunctions": [
+        "listUsers",
+        "getUser",
+        "updateUserRole",
+        "resetUserPassword",
+        "deleteUser",
+        "listLadders",
+        "deleteLadder",
+        "getAdminStats"
+      ],
+      "externalDependencies": [
+        "bcrypt@^6.0.0",
+        "mongoose@^9.9.5"
+      ],
+      "internalDependencies": [
+        "All models",
+        "utils/httpError.js"
+      ],
+      "dataAccess": {
+        "reads": [
+          "All collections"
+        ],
+        "writes": [
+          "users",
+          "ladders",
+          "ladderquestions",
+          "laddermembers",
+          "userladderquestionpractices",
+          "userquestionstates"
+        ]
+      },
+      "knownEdgeCases": [
+        "Deleting a user cascades deletions across their personal ladders, memberships, practice records, and question states."
+      ]
+    },
+    {
+      "id": "health",
+      "name": "Diagnostics & Health Check",
+      "purpose": "Reports API service availability and MongoDB connectivity status.",
+      "entryPoints": [
+        "GET /api/health"
+      ],
+      "files": [
+        "app.js"
+      ],
+      "keyFunctions": [
+        "inline handler in app.js"
+      ],
+      "externalDependencies": [
+        "mongoose@^9.9.5"
+      ],
+      "internalDependencies": [],
+      "dataAccess": {
+        "reads": [
+          "mongoose.connection.readyState"
+        ],
+        "writes": []
+      },
+      "knownEdgeCases": [
+        "Strict equality assertion in tests/api.test.js expects { ok: true, service: 'codeladder-api' } without database payload."
+      ]
+    }
+  ],
+  "directories": [
+    {
+      "path": "controllers/",
+      "role": "Business logic implementations decoupled from HTTP routing."
+    },
+    {
+      "path": "data/",
+      "role": "Pre-packaged dataset seed files for bootstrap and offline catalog operations."
+    },
+    {
+      "path": "middleware/",
+      "role": "Express request pipeline filters, security checks, and rate limiters."
+    },
+    {
+      "path": "models/",
+      "role": "Mongoose schemas, validation rules, and collection indices."
+    },
+    {
+      "path": "routes/",
+      "role": "Express route definitions mapping HTTP paths to controllers and middlewares."
+    },
+    {
+      "path": "scripts/",
+      "role": "Database maintenance, synchronization, and ETL utilities."
+    },
+    {
+      "path": "services/",
+      "role": "Application-wide domain services and caching layers (questionCatalog, defaultLadders)."
+    },
+    {
+      "path": "tests/",
+      "role": "Automated integration tests using Jest and Supertest."
+    },
+    {
+      "path": "utils/",
+      "role": "Cross-cutting helper functions (asyncHandler, httpError)."
+    }
+  ],
+  "dependencies": {
+    "external": {
+      "production": {
+        "express": "^5.2.1",
+        "mongoose": "^9.9.5",
+        "jsonwebtoken": "^9.0.3",
+        "bcrypt": "^6.0.0",
+        "cors": "^2.8.6",
+        "dotenv": "^17.4.2",
+        "express-rate-limit": "^8.7.0"
+      },
+      "development": {
+        "jest": "^29.7.0",
+        "supertest": "^7.2.2",
+        "nodemon": "^3.1.14"
+      }
+    },
+    "internalCoupling": [
+      {
+        "source": "middleware/validateObjectId.js",
+        "target": "services/questionCatalog.js",
+        "reason": "Resolves non-ObjectId slugs to ObjectIds dynamically."
+      },
+      {
+        "source": "services/defaultLadders.js",
+        "target": "services/questionCatalog.js",
+        "reason": "Hydrates problem metadata for default curated sheets."
+      },
+      {
+        "source": "controllers/ladderController.js",
+        "target": "services/defaultLadders.js",
+        "reason": "Serves default- prefixed ladders without database queries."
+      }
+    ]
+  },
+  "flows": [
+    {
+      "name": "User Authentication Flow",
+      "steps": [
+        "Client sends request with Authorization: Bearer <jwt> and X-Username headers",
+        "app.js generalLimiter throttles request if limit exceeded",
+        "middleware/auth.js verifies JWT signature and validates username match",
+        "models/User.js is queried to attach req.user { id, username, role }",
+        "Target route controller executes business logic"
+      ]
+    },
+    {
+      "name": "Question Catalog Search Flow",
+      "steps": [
+        "Client sends GET /api/questions with search query, tags, and rating filters",
+        "app.js catalogLimiter evaluates rate window",
+        "routes/questions.js routes to controllers/questionController.js listQuestions",
+        "services/questionCatalog.js performs in-memory filter, slice, and tag count in < 2ms",
+        "JSON response returns questions array with pagination metadata"
+      ]
+    },
+    {
+      "name": "Platform Solve State Synchronization Flow",
+      "steps": [
+        "Client sends POST /api/platform-accounts/sync-solved with solved problem titles/slugs",
+        "middleware/auth.js authenticates user session",
+        "controllers/platformAccountController.js maps slugs to question IDs via questionCatalog",
+        "models/UserQuestionState.js executes bulkWrite upsert for solved: true",
+        "PlatformAccount.lastSyncedAt timestamp is refreshed in database"
+      ]
+    }
+  ],
+  "commands": {
+    "install": "npm install",
+    "dev": "npm run dev",
+    "start": "npm start",
+    "test": "npm test",
+    "import": "npm run import",
+    "buildCatalog": "node scripts/buildCatalog.js",
+    "syncCodeforces": "node scripts/syncCodeforcesContests.js",
+    "syncCodeChef": "node scripts/syncCodeChefContests.js",
+    "syncLeetCode": "node scripts/syncLeetCodeContests.js",
+    "setupProxy": "node setup-proxy.js",
+    "revertProxy": "node revert-proxy.js"
+  }
+}
