@@ -66,7 +66,7 @@ app.use(mongoSanitize);
 
 app.use('/api', generalLimiter);
 
-app.get('/api/health', (req, res) => {
+const sendHealth = (req, res) => {
   const connection = mongoose.connection;
   const isConnected = connection.readyState === 1;
   const isProd = process.env.NODE_ENV === 'production';
@@ -83,7 +83,12 @@ app.get('/api/health', (req, res) => {
       })
     }
   });
-});
+};
+
+app.get('/', sendHealth);
+app.get('/health', sendHealth);
+app.get('/api/health', sendHealth);
+
 
 app.use('/api/auth/login', loginLimiter);
 app.use('/api/auth/register', registerLimiter);
