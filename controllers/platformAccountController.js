@@ -1256,9 +1256,17 @@ function getCodeChefContestCatalog() {
   const nameMap = new Map();
   const codeMap = new Map();
   try {
-    const filePath = path.join(__dirname, '../data/codechef-contest.json');
-    if (fs.existsSync(filePath)) {
-      const contestList = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    let contestList = null;
+    try {
+      contestList = require('../data/codechef-contest.json');
+    } catch (_) {
+      const filePath = path.join(__dirname, '../data/codechef-contest.json');
+      if (fs.existsSync(filePath)) {
+        contestList = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      }
+    }
+
+    if (Array.isArray(contestList)) {
       for (const c of contestList) {
         for (const p of (c.problems || [])) {
           if (p.code) {
