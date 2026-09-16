@@ -76,6 +76,7 @@ const sendHealth = (req, res) => {
     service: 'codeladder-api',
     database: {
       connected: isConnected,
+      readyState: connection.readyState,
       ...(isProd ? {} : {
         host: connection.host || null,
         port: connection.port || null,
